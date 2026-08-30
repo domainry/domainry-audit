@@ -1,9 +1,10 @@
-package schema
+package schema_test
 
 import (
 	"strings"
 	"testing"
 
+	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
@@ -14,7 +15,7 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			migrations, err := Migrations(renderer, driver)
+			migrations, err := auditpersistence.SchemaMigrations(renderer, driver)
 			if err != nil {
 				t.Fatal(err)
 			}

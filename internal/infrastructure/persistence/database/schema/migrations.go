@@ -2,13 +2,31 @@ package schema
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/domainry/domainry-audit-sdk/modulehost"
 	ormbuilder "github.com/domainry/domainry-orm/builder"
 )
 
-func Migrations(renderer modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
+type ColumnKind string
+
+const (
+	Key191 ColumnKind = "key191"
+	Key64  ColumnKind = "key64"
+	Key40  ColumnKind = "key40"
+	Key32  ColumnKind = "key32"
+	Long   ColumnKind = "long"
+	JSON   ColumnKind = "json"
+	BigInt ColumnKind = "bigint"
+)
+
+type Profile interface {
+	ColumnType(ColumnKind) (string, error)
+}
+
+func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.SchemaMigration, error) {
+	if profile == nil {
+		return nil, fmt.Errorf("Audit database engine is required")
+	}
 	eventTable, _, err := ormbuilder.NewCreateTableBuilder(renderer, "_audit_events").WithoutSystemColumns().Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
@@ -40,7 +58,7 @@ func Migrations(renderer modulehost.Dialect, driver string) ([]modulehost.Schema
 		}
 		exportStatements = append(exportStatements, statement)
 	}
-	baseline, err := schemaBaseline(driver)
+	baseline, err := schemaBaseline(profile)
 	if err != nil {
 		return nil, err
 	}
@@ -50,27 +68,25 @@ func Migrations(renderer modulehost.Dialect, driver string) ([]modulehost.Schema
 	}, nil
 }
 
-func schemaBaseline(driver string) (modulehost.SchemaBaseline, error) {
-	types := map[string]string{}
-	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "sqlite", "sqlite3":
-		types = map[string]string{"key191": "TEXT", "key64": "TEXT", "key40": "TEXT", "key32": "TEXT", "long": "TEXT", "json": "TEXT", "bigint": "BIGINT"}
-	case "postgres", "postgresql", "pgx":
-		types = map[string]string{"key191": "TEXT", "key64": "TEXT", "key40": "TEXT", "key32": "TEXT", "long": "TEXT", "json": "JSONB", "bigint": "BIGINT"}
-	case "mysql":
-		types = map[string]string{"key191": "VARCHAR(191)", "key64": "VARCHAR(64)", "key40": "VARCHAR(40)", "key32": "VARCHAR(32)", "long": "LONGTEXT", "json": "JSON", "bigint": "BIGINT"}
-	default:
-		return modulehost.SchemaBaseline{}, fmt.Errorf("unsupported Audit database driver %q", driver)
+func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
+	specs := []struct {
+		name              string
+		kind              ColumnKind
+		nullable, primary bool
+	}{
+		{"id", Key191, false, true}, {"workspace_id", Key191, false, true}, {"event", Key191, false, false},
+		{"object_key", Key191, true, false}, {"record_id", Key191, true, false}, {"actor_id", Key191, true, false},
+		{"role_key", Key191, true, false}, {"summary", Long, true, false}, {"metadata_json", JSON, false, false},
+		{"before_json", JSON, false, false}, {"after_json", JSON, false, false}, {"created_at", Key40, false, false},
 	}
-	column := func(name, kind string, nullable, primary bool) modulehost.SchemaColumn {
-		return modulehost.SchemaColumn{Name: name, Type: types[kind], Nullable: nullable, PrimaryKey: primary}
+	events := modulehost.SchemaTable{Name: "_audit_events", Columns: make([]modulehost.SchemaColumn, len(specs))}
+	for index, spec := range specs {
+		physical, err := profile.ColumnType(spec.kind)
+		if err != nil {
+			return modulehost.SchemaBaseline{}, fmt.Errorf("resolve Audit baseline column %s: %w", spec.name, err)
+		}
+		events.Columns[index] = modulehost.SchemaColumn{Name: spec.name, Type: physical, Nullable: spec.nullable, PrimaryKey: spec.primary}
 	}
-	events := modulehost.SchemaTable{Name: "_audit_events", Columns: []modulehost.SchemaColumn{
-		column("id", "key191", false, true), column("workspace_id", "key191", false, true), column("event", "key191", false, false),
-		column("object_key", "key191", true, false), column("record_id", "key191", true, false), column("actor_id", "key191", true, false),
-		column("role_key", "key191", true, false), column("summary", "long", true, false), column("metadata_json", "json", false, false),
-		column("before_json", "json", false, false), column("after_json", "json", false, false), column("created_at", "key40", false, false),
-	}}
 	return modulehost.SchemaBaseline{Tables: []modulehost.SchemaTable{events}}, nil
 }
 

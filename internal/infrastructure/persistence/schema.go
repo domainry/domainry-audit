@@ -6,5 +6,9 @@ import (
 )
 
 func SchemaMigrations(renderer modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
-	return storeschema.Migrations(renderer, driver)
+	engine, err := NewEngine(driver)
+	if err != nil {
+		return nil, err
+	}
+	return storeschema.Migrations(renderer, engine)
 }
