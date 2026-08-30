@@ -73,10 +73,10 @@ func TestModuleUsesBorrowedHostDatabase(t *testing.T) {
 	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM _audit_events`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM audit_export_artifacts`).Scan(&count); err != nil {
+	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM _audit_export_artifacts`).Scan(&count); err != nil {
 		t.Fatalf("neutral Audit export artifact table is missing: %v", err)
 	}
-	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM business_audit_export_artifacts`).Scan(&count); err == nil {
+	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM business__audit_export_artifacts`).Scan(&count); err == nil {
 		t.Fatal("legacy Runtime-specific Audit export table must not be created")
 	}
 }

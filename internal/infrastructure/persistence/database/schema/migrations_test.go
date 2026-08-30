@@ -26,7 +26,7 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 				t.Fatalf("migration baseline=%+v", migrations[0].Baseline)
 			}
 			joined := strings.Join(append(append([]string(nil), migrations[0].Statements...), migrations[1].Statements...), "\n")
-			for _, required := range []string{"_audit_events", "audit_export_artifacts", "idx_audit_event_actor_cursor", "uniq_audit_export_idempotency"} {
+			for _, required := range []string{"_audit_events", "_audit_export_artifacts", "idx_audit_event_actor_cursor", "uniq_audit_export_idempotency"} {
 				if !strings.Contains(joined, required) {
 					t.Errorf("%s migration missing %q", driver, required)
 				}

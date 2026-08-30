@@ -2,7 +2,7 @@
 
 The source-owned Audit business module used by Domainry Runtime and other
 Domainry modules. It borrows a host database pool, owns `_audit_events` and
-`audit_export_artifacts`, and can append mandatory evidence inside a host-owned
+`_audit_export_artifacts`, and can append mandatory evidence inside a host-owned
 transaction.
 
 The module follows the standard Domainry boundaries:

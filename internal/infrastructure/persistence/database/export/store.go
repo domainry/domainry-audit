@@ -38,7 +38,7 @@ func (s *Store) CreateOrGetExport(ctx context.Context, artifact contract.ExportA
 	}
 	artifact.ID = exportID(artifact)
 	filters, _ := json.Marshal(artifact.Filters)
-	statement, args, err := ormbuilder.NewWorkspaceInsertBuilder(s.renderer, "audit_export_artifacts", artifact.WorkspaceID).
+	statement, args, err := ormbuilder.NewWorkspaceInsertBuilder(s.renderer, "_audit_export_artifacts", artifact.WorkspaceID).
 		Columns(exportWorkspaceColumns()...).Values(artifact.ID, artifact.RequesterUserID, artifact.RoleKey, artifact.IdempotencyKey, string(filters), artifact.ScopeSHA256, artifact.AuthorizationScopeSHA256, artifact.TokenSHA256, artifact.Filename, artifact.ContentSHA256, artifact.RowCount, base64.StdEncoding.EncodeToString(artifact.Content), artifact.AuditIdentity, artifact.Status, artifact.CreatedAt, artifact.ExpiresAt, artifact.DownloadCount, artifact.LastDownloadedAt).Build()
 	if err != nil {
 		return contract.ExportArtifact{}, false, err
@@ -64,7 +64,7 @@ func (s *Store) ExportByTokenHash(ctx context.Context, workspaceID, tokenHash st
 }
 
 func (s *Store) RecordExportDownload(ctx context.Context, workspaceID, artifactID, downloadedAt string) (bool, error) {
-	statement, args, err := ormbuilder.NewWorkspaceUpdateBuilder(s.renderer, "audit_export_artifacts", strings.TrimSpace(workspaceID)).Set("download_count", 1).Set("last_downloaded_at", strings.TrimSpace(downloadedAt)).Set("status", "downloaded").Where(ormbuilder.And(ormbuilder.Equal("id", strings.TrimSpace(artifactID)), ormbuilder.Equal("download_count", 0))).Build()
+	statement, args, err := ormbuilder.NewWorkspaceUpdateBuilder(s.renderer, "_audit_export_artifacts", strings.TrimSpace(workspaceID)).Set("download_count", 1).Set("last_downloaded_at", strings.TrimSpace(downloadedAt)).Set("status", "downloaded").Where(ormbuilder.And(ormbuilder.Equal("id", strings.TrimSpace(artifactID)), ormbuilder.Equal("download_count", 0))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -76,7 +76,7 @@ func (s *Store) RecordExportDownload(ctx context.Context, workspaceID, artifactI
 	if rows == 1 {
 		return true, nil
 	}
-	lookup, lookupArgs, err := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "audit_export_artifacts", workspaceID).Projections(ormbuilder.Project(ormbuilder.CountAll())).Where(ormbuilder.Equal("id", strings.TrimSpace(artifactID))).Build()
+	lookup, lookupArgs, err := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_export_artifacts", workspaceID).Projections(ormbuilder.Project(ormbuilder.CountAll())).Where(ormbuilder.Equal("id", strings.TrimSpace(artifactID))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -98,7 +98,7 @@ func (s *Store) exportByIdempotency(ctx context.Context, artifact contract.Expor
 	return scanExport(s.db.QueryRowContext(ctx, statement, args...))
 }
 func (s *Store) exportSelect(workspaceID string) *ormbuilder.SelectBuilder {
-	return ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "audit_export_artifacts", strings.TrimSpace(workspaceID)).Columns(exportColumns()...)
+	return ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_export_artifacts", strings.TrimSpace(workspaceID)).Columns(exportColumns()...)
 }
 func exportColumns() []string {
 	return []string{"id", "workspace_id", "requester_user_id", "role_key", "idempotency_key", "filters_json", "scope_sha256", "authorization_scope_sha256", "token_sha256", "filename", "content_sha256", "row_count", "content_base64", "audit_identity", "status", "created_at", "expires_at", "download_count", "last_downloaded_at"}

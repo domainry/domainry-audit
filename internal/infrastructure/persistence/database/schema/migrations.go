@@ -31,9 +31,9 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
 	}
-	exportTable, _, err := ormschema.NewTable(renderer, "audit_export_artifacts").Columns(exportColumns()...).PrimaryKey("workspace_id", "id").Build()
+	exportTable, _, err := ormschema.NewTable(renderer, "_audit_export_artifacts").Columns(exportColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
-		return nil, fmt.Errorf("build Audit table audit_export_artifacts: %w", err)
+		return nil, fmt.Errorf("build Audit table _audit_export_artifacts: %w", err)
 	}
 	exportStatements := []string{exportTable}
 	indexes := []struct {
@@ -43,9 +43,9 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	}{
 		{"_audit_events", "idx_audit_event_actor_cursor", false, []string{"workspace_id", "actor_id", "created_at", "id"}},
 		{"_audit_events", "idx_audit_event_record_cursor", false, []string{"workspace_id", "object_key", "record_id", "created_at", "id"}},
-		{"audit_export_artifacts", "uniq_audit_export_idempotency", true, []string{"workspace_id", "requester_user_id", "idempotency_key"}},
-		{"audit_export_artifacts", "uniq_audit_export_token_hash", true, []string{"workspace_id", "token_sha256"}},
-		{"audit_export_artifacts", "idx_audit_export_expiry", false, []string{"workspace_id", "expires_at"}},
+		{"_audit_export_artifacts", "uniq_audit_export_idempotency", true, []string{"workspace_id", "requester_user_id", "idempotency_key"}},
+		{"_audit_export_artifacts", "uniq_audit_export_token_hash", true, []string{"workspace_id", "token_sha256"}},
+		{"_audit_export_artifacts", "idx_audit_export_expiry", false, []string{"workspace_id", "expires_at"}},
 	}
 	for _, index := range indexes {
 		builder := ormschema.NewIndex(renderer, index.name, index.table).Columns(index.columns...)

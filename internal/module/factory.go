@@ -21,7 +21,7 @@ type contractClock interface{ Now() time.Time }
 type Factory struct{ options Options }
 
 func OwnedTables() []string {
-	return []string{"_audit_events", "audit_export_artifacts"}
+	return []string{"_audit_events", "_audit_export_artifacts"}
 }
 
 func SchemaMigrations(dialect modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
