@@ -2,20 +2,14 @@ module github.com/domainry/domainry-audit
 
 go 1.26.0
 
-replace github.com/domainry/domainry-audit-sdk => ../domainry-audit-sdk
-
-replace github.com/domainry/domainry-foundation => ../domainry-foundation
-
-replace github.com/domainry/domainry-orm => ../domainry-orm
-
 require (
-	github.com/domainry/domainry-audit-sdk v0.0.0
-	github.com/domainry/domainry-orm v0.1.25-0.20260829222221-e316e284305e
+	github.com/domainry/domainry-audit-sdk v0.1.0
+	github.com/domainry/domainry-orm v0.1.25
 	modernc.org/sqlite v1.53.0
 )
 
 require (
-	github.com/domainry/domainry-foundation v0.1.0-dev.5 // indirect
+	github.com/domainry/domainry-foundation v0.1.0-dev.6 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
