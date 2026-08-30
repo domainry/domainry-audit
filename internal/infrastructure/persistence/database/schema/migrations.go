@@ -9,7 +9,7 @@ import (
 )
 
 func Migrations(renderer modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
-	eventTable, _, err := ormbuilder.NewCreateTableBuilder(renderer, "_audit_events").WithoutSystemColumns().Columns(auditColumns()...).PrimaryKey("id").Build()
+	eventTable, _, err := ormbuilder.NewCreateTableBuilder(renderer, "_audit_events").WithoutSystemColumns().Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
 	}
@@ -66,7 +66,7 @@ func schemaBaseline(driver string) (modulehost.SchemaBaseline, error) {
 		return modulehost.SchemaColumn{Name: name, Type: types[kind], Nullable: nullable, PrimaryKey: primary}
 	}
 	events := modulehost.SchemaTable{Name: "_audit_events", Columns: []modulehost.SchemaColumn{
-		column("id", "key191", false, true), column("workspace_id", "key191", false, false), column("event", "key191", false, false),
+		column("id", "key191", false, true), column("workspace_id", "key191", false, true), column("event", "key191", false, false),
 		column("object_key", "key191", true, false), column("record_id", "key191", true, false), column("actor_id", "key191", true, false),
 		column("role_key", "key191", true, false), column("summary", "long", true, false), column("metadata_json", "json", false, false),
 		column("before_json", "json", false, false), column("after_json", "json", false, false), column("created_at", "key40", false, false),
