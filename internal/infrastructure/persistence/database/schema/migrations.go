@@ -2,9 +2,9 @@ package schema
 
 import (
 	"fmt"
+	ormschema "github.com/domainry/domainry-orm/schema"
 
 	"github.com/domainry/domainry-audit-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/builder"
 )
 
 type ColumnKind string
@@ -27,11 +27,11 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if profile == nil {
 		return nil, fmt.Errorf("Audit database engine is required")
 	}
-	eventTable, _, err := ormbuilder.NewCreateTableBuilder(renderer, "_audit_events").WithoutSystemColumns().Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
+	eventTable, _, err := ormschema.NewTable(renderer, "_audit_events").Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
 	}
-	exportTable, _, err := ormbuilder.NewCreateTableBuilder(renderer, "audit_export_artifacts").WithoutSystemColumns().Columns(exportColumns()...).PrimaryKey("workspace_id", "id").Build()
+	exportTable, _, err := ormschema.NewTable(renderer, "audit_export_artifacts").Columns(exportColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table audit_export_artifacts: %w", err)
 	}
@@ -48,7 +48,7 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 		{"audit_export_artifacts", "idx_audit_export_expiry", false, []string{"workspace_id", "expires_at"}},
 	}
 	for _, index := range indexes {
-		builder := ormbuilder.NewCreateIndexBuilder(renderer, index.name, index.table).Columns(index.columns...)
+		builder := ormschema.NewIndex(renderer, index.name, index.table).Columns(index.columns...)
 		if index.unique {
 			builder.Unique()
 		}
@@ -90,26 +90,26 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 	return modulehost.SchemaBaseline{Tables: []modulehost.SchemaTable{events}}, nil
 }
 
-func auditColumns() []ormbuilder.SchemaColumn {
-	return []ormbuilder.SchemaColumn{
-		required("id", ormbuilder.TextKeyType(191)), required("workspace_id", ormbuilder.TextKeyType(191)), required("event", ormbuilder.TextKeyType(191)),
-		ormbuilder.DefineColumn("object_key", ormbuilder.TextKeyType(191)), ormbuilder.DefineColumn("record_id", ormbuilder.TextKeyType(191)),
-		ormbuilder.DefineColumn("actor_id", ormbuilder.TextKeyType(191)), ormbuilder.DefineColumn("role_key", ormbuilder.TextKeyType(191)), ormbuilder.DefineColumn("summary", ormbuilder.LongTextType()),
-		required("metadata_json", ormbuilder.JSONType()), required("before_json", ormbuilder.JSONType()), required("after_json", ormbuilder.JSONType()), required("created_at", ormbuilder.TextKeyType(40)),
+func auditColumns() []ormschema.ColumnDefinition {
+	return []ormschema.ColumnDefinition{
+		required("id", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
+		ormschema.Column("object_key", ormschema.TextKey(191)), ormschema.Column("record_id", ormschema.TextKey(191)),
+		ormschema.Column("actor_id", ormschema.TextKey(191)), ormschema.Column("role_key", ormschema.TextKey(191)), ormschema.Column("summary", ormschema.LongText()),
+		required("metadata_json", ormschema.JSON()), required("before_json", ormschema.JSON()), required("after_json", ormschema.JSON()), required("created_at", ormschema.TextKey(40)),
 	}
 }
 
-func exportColumns() []ormbuilder.SchemaColumn {
-	return []ormbuilder.SchemaColumn{
-		required("workspace_id", ormbuilder.TextKeyType(191)), required("id", ormbuilder.TextKeyType(191)), required("requester_user_id", ormbuilder.TextKeyType(191)),
-		required("role_key", ormbuilder.TextKeyType(191)), required("idempotency_key", ormbuilder.TextKeyType(191)), required("filters_json", ormbuilder.JSONType()),
-		required("scope_sha256", ormbuilder.TextKeyType(64)), required("authorization_scope_sha256", ormbuilder.TextKeyType(64)), required("token_sha256", ormbuilder.TextKeyType(64)),
-		required("filename", ormbuilder.LongTextType()), required("content_sha256", ormbuilder.TextKeyType(64)), required("row_count", ormbuilder.BigIntType()), required("content_base64", ormbuilder.LongTextType()),
-		required("audit_identity", ormbuilder.LongTextType()), required("status", ormbuilder.TextKeyType(32)), required("created_at", ormbuilder.TextKeyType(40)), required("expires_at", ormbuilder.TextKeyType(40)),
-		ormbuilder.DefineColumn("download_count", ormbuilder.BigIntType()).NotNull().DefaultValue(0), required("last_downloaded_at", ormbuilder.TextKeyType(40)),
+func exportColumns() []ormschema.ColumnDefinition {
+	return []ormschema.ColumnDefinition{
+		required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("requester_user_id", ormschema.TextKey(191)),
+		required("role_key", ormschema.TextKey(191)), required("idempotency_key", ormschema.TextKey(191)), required("filters_json", ormschema.JSON()),
+		required("scope_sha256", ormschema.TextKey(64)), required("authorization_scope_sha256", ormschema.TextKey(64)), required("token_sha256", ormschema.TextKey(64)),
+		required("filename", ormschema.LongText()), required("content_sha256", ormschema.TextKey(64)), required("row_count", ormschema.BigInt()), required("content_base64", ormschema.LongText()),
+		required("audit_identity", ormschema.LongText()), required("status", ormschema.TextKey(32)), required("created_at", ormschema.TextKey(40)), required("expires_at", ormschema.TextKey(40)),
+		ormschema.Column("download_count", ormschema.BigInt()).NotNull().DefaultValue(0), required("last_downloaded_at", ormschema.TextKey(40)),
 	}
 }
 
-func required(name string, kind ormbuilder.ColumnType) ormbuilder.SchemaColumn {
-	return ormbuilder.DefineColumn(name, kind).NotNull()
+func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
+	return ormschema.Column(name, kind).NotNull()
 }

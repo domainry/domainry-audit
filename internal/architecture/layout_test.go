@@ -46,7 +46,7 @@ func TestAuditSchemaUsesORMMigrationHost(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	required := map[string]string{
-		"internal/infrastructure/persistence/database/schema/migrations.go": "ormbuilder.NewCreateTableBuilder",
+		"internal/infrastructure/persistence/database/schema/migrations.go": "ormschema.NewTable",
 		"internal/module/factory.go":                                        "ApplyOwnedMigrations",
 	}
 	for name, marker := range required {

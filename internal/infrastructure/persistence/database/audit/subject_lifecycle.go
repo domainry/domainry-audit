@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
-	ormbuilder "github.com/domainry/domainry-orm/builder"
+	ormbuilder "github.com/domainry/domainry-orm/query"
 )
 
 func (s *Store) PreviewSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
