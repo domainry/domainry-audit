@@ -1,4 +1,4 @@
-package policy
+package service
 
 import (
 	"fmt"
@@ -13,7 +13,7 @@ const retentionDays = 365
 
 var filterValue = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}$`)
 
-func NormalizeFilters(request contract.ExportRequest, principal contract.ExportPrincipal, now time.Time) (contract.ExportFilter, error) {
+func NormalizeExportFilters(request contract.ExportRequest, principal contract.ExportPrincipal, now time.Time) (contract.ExportFilter, error) {
 	if format := strings.ToLower(strings.TrimSpace(request.Format)); format != "" && format != "csv" {
 		return contract.ExportFilter{}, exportError("export_format_invalid", nil)
 	}
@@ -54,7 +54,7 @@ func NormalizeFilters(request contract.ExportRequest, principal contract.ExportP
 	return filters, nil
 }
 
-func EventResult(event contract.Event) string {
+func ExportEventResult(event contract.Event) string {
 	for _, key := range []string{"result", "outcome", "status"} {
 		if value, ok := event.Metadata[key]; ok {
 			result := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))

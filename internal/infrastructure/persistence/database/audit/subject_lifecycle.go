@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"time"
 
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/query"
 )
 
 func (s *Store) PreviewSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
-	statement, args, err := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(ormbuilder.Project(ormbuilder.CountAll())).Where(ormbuilder.Equal("actor_id", identity)).Build()
+	statement, args, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(query.Project(query.CountAll())).Where(query.Equal("actor_id", identity)).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -24,11 +24,11 @@ func (s *Store) PreviewSubject(ctx context.Context, workspaceID, identity string
 
 func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
 	columns := []string{"id", "event", "object_key", "record_id", "summary", "created_at"}
-	projections := make([]ormbuilder.Projection, 0, len(columns))
+	projections := make([]query.Projection, 0, len(columns))
 	for _, column := range columns {
-		projections = append(projections, ormbuilder.Project(ormbuilder.Coalesce(ormbuilder.Column(column), ormbuilder.Value(""))))
+		projections = append(projections, query.Project(query.Coalesce(query.Column(column), query.Value(""))))
 	}
-	statement, args, err := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(projections...).Where(ormbuilder.Equal("actor_id", identity)).OrderBy(ormbuilder.Ascending("created_at")).Build()
+	statement, args, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(projections...).Where(query.Equal("actor_id", identity)).OrderBy(query.Ascending("created_at")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string)
 func (s *Store) EraseSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
 	sum := sha256.Sum256([]byte(workspaceID + "\x00" + identity))
 	anonymous := "erased-" + hex.EncodeToString(sum[:12])
-	statement, args, err := ormbuilder.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).Set("actor_id", anonymous).Where(ormbuilder.Equal("actor_id", identity)).Build()
+	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).Set("actor_id", anonymous).Where(query.Equal("actor_id", identity)).Build()
 	if err != nil {
 		return nil, err
 	}

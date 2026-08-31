@@ -13,22 +13,27 @@ func TestAuditModuleUsesLayeredSourceLayout(t *testing.T) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	for _, required := range []string{
 		"internal/application/audit",
-		"internal/application/export",
+		"internal/adapter/auditsdk",
+		"internal/assembly/module",
+		"internal/domain/audit/repository",
 		"internal/domain/audit/service",
-		"internal/domain/export/policy",
-		"internal/domain/export/repository",
 		"internal/infrastructure/persistence/database/audit",
 		"internal/infrastructure/persistence/database/export",
+		"internal/infrastructure/persistence/database/migration",
 		"internal/infrastructure/persistence/database/schema",
-		"internal/module",
+		"internal/infrastructure/persistence/sqlite/schema",
+		"internal/infrastructure/persistence/mysql/schema",
+		"internal/infrastructure/persistence/postgres/schema",
 		"module",
 	} {
 		if info, err := os.Stat(filepath.Join(root, required)); err != nil || !info.IsDir() {
 			t.Errorf("required Audit boundary %q is missing", required)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "internal/audit")); !os.IsNotExist(err) {
-		t.Error("flat internal/audit package is forbidden")
+	for _, forbidden := range []string{"internal/audit", "internal/module", "internal/application/export", "internal/domain/export"} {
+		if _, err := os.Stat(filepath.Join(root, forbidden)); !os.IsNotExist(err) {
+			t.Errorf("legacy Audit boundary %q is forbidden", forbidden)
+		}
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "module"))
 	if err != nil {
@@ -46,8 +51,8 @@ func TestAuditSchemaUsesORMMigrationHost(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	required := map[string]string{
-		"internal/infrastructure/persistence/database/schema/migrations.go": "ormschema.NewTable",
-		"internal/module/factory.go":                                        "ApplyOwnedMigrations",
+		"internal/infrastructure/persistence/database/migration/migrations.go": "ormschema.NewTable",
+		"internal/assembly/module/factory.go":                                  "ApplyOwnedMigrations",
 	}
 	for name, marker := range required {
 		content, err := os.ReadFile(filepath.Join(root, name))
@@ -86,7 +91,7 @@ func TestAuditDatabaseChoiceIsConfinedToEngineFactoryAndProfiles(t *testing.T) {
 			return err
 		}
 		normalized := filepath.ToSlash(path)
-		if filepath.Base(path) == "engine.go" || strings.Contains(normalized, "/schema/sqlite/") || strings.Contains(normalized, "/schema/mysql/") || strings.Contains(normalized, "/schema/postgres/") {
+		if filepath.Base(path) == "engine.go" || strings.Contains(normalized, "/sqlite/schema/") || strings.Contains(normalized, "/mysql/schema/") || strings.Contains(normalized, "/postgres/schema/") {
 			return nil
 		}
 		content, readErr := os.ReadFile(path)

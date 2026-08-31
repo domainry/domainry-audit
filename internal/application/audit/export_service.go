@@ -1,4 +1,4 @@
-package exportapp
+package auditapp
 
 import (
 	"bytes"
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
-	exportpolicy "github.com/domainry/domainry-audit/internal/domain/export/policy"
-	exportrepository "github.com/domainry/domainry-audit/internal/domain/export/repository"
+	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
+	auditservice "github.com/domainry/domainry-audit/internal/domain/audit/service"
 )
 
 const exportTTL = 15 * time.Minute
@@ -33,28 +33,28 @@ type EventAppender interface {
 	Append(context.Context, contract.AppendRequest) (contract.Event, error)
 }
 
-type Service struct {
+type ExportService struct {
 	reader           EventReader
-	store            exportrepository.ArtifactRepository
+	store            auditrepository.ExportArtifactRepository
 	appender         EventAppender
 	clock            Clock
 	exportTokenKey   []byte
 	exportAuthorizer contract.ExportAuthorizer
 }
 
-func NewService(reader EventReader, store exportrepository.ArtifactRepository, appender EventAppender, clock Clock) *Service {
+func NewExportService(reader EventReader, store auditrepository.ExportArtifactRepository, appender EventAppender, clock Clock) *ExportService {
 	if clock == nil {
 		clock = systemClock{}
 	}
-	return &Service{reader: reader, store: store, appender: appender, clock: clock}
+	return &ExportService{reader: reader, store: store, appender: appender, clock: clock}
 }
 
-func (s *Service) ConfigureExport(key []byte, authorizer contract.ExportAuthorizer) {
+func (s *ExportService) ConfigureExport(key []byte, authorizer contract.ExportAuthorizer) {
 	s.exportTokenKey = append([]byte(nil), key...)
 	s.exportAuthorizer = authorizer
 }
 
-func (s *Service) PrepareExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal contract.ExportPrincipal) (contract.ExportPrepared, error) {
+func (s *ExportService) PrepareExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal contract.ExportPrincipal) (contract.ExportPrepared, error) {
 	if len(s.exportTokenKey) < 16 {
 		return contract.ExportPrepared{}, exportError("export_unavailable", nil)
 	}
@@ -63,7 +63,7 @@ func (s *Service) PrepareExport(ctx context.Context, request contract.ExportRequ
 		return contract.ExportPrepared{}, exportError("idempotency_key_required", nil)
 	}
 	now := s.clock.Now().UTC()
-	filters, err := exportpolicy.NormalizeFilters(request, principal, now)
+	filters, err := auditservice.NormalizeExportFilters(request, principal, now)
 	if err != nil {
 		return contract.ExportPrepared{}, err
 	}
@@ -81,7 +81,7 @@ func (s *Service) PrepareExport(ctx context.Context, request contract.ExportRequ
 		if contract.ClassifyAuditEvent(event) != contract.AuditEventClassBusiness {
 			continue
 		}
-		result := exportpolicy.EventResult(event)
+		result := auditservice.ExportEventResult(event)
 		if filters.Result != "" && !strings.EqualFold(filters.Result, result) {
 			continue
 		}
@@ -118,7 +118,7 @@ func (s *Service) PrepareExport(ctx context.Context, request contract.ExportRequ
 	return preparedExport(stored, token), nil
 }
 
-func (s *Service) DownloadExport(ctx context.Context, token string, principal contract.ExportPrincipal) ([]byte, string, error) {
+func (s *ExportService) DownloadExport(ctx context.Context, token string, principal contract.ExportPrincipal) ([]byte, string, error) {
 	if len(s.exportTokenKey) < 16 {
 		return nil, "", exportError("export_unavailable", nil)
 	}
@@ -176,7 +176,7 @@ func encodeExportCSV(rows [][]string) ([]byte, error) {
 	w.Flush()
 	return b.Bytes(), w.Error()
 }
-func (s *Service) exportToken(id, scope, expires string) string {
+func (s *ExportService) exportToken(id, scope, expires string) string {
 	payload := id + "." + expires
 	mac := hmac.New(sha256.New, s.exportTokenKey)
 	_, _ = mac.Write([]byte(payload + "\x00" + scope))
@@ -200,7 +200,7 @@ func exportAuthorizationHash(p contract.ExportPrincipal) string {
 }
 func exportHash(v any) string         { encoded, _ := json.Marshal(v); return exportBytesHash(encoded) }
 func exportBytesHash(v []byte) string { sum := sha256.Sum256(v); return hex.EncodeToString(sum[:]) }
-func (s *Service) appendExportAudit(ctx context.Context, event string, p contract.ExportPrincipal, a contract.ExportArtifact, extra map[string]any) error {
+func (s *ExportService) appendExportAudit(ctx context.Context, event string, p contract.ExportPrincipal, a contract.ExportArtifact, extra map[string]any) error {
 	metadata := map[string]any{"artifact_id": a.ID, "audit_identity": a.AuditIdentity, "content_sha256": a.ContentSHA256, "scope_sha256": a.ScopeSHA256, "row_count": a.RowCount, "expires_at": a.ExpiresAt}
 	for k, v := range extra {
 		metadata[k] = v

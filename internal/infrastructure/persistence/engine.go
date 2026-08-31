@@ -2,14 +2,14 @@ package persistence
 
 import (
 	"fmt"
-	auditschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/schema"
-	mysqlschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/schema/mysql"
-	postgresschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/schema/postgres"
-	sqliteschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/schema/sqlite"
+	auditmigration "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/migration"
+	mysqlschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/mysql/schema"
+	postgresschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/postgres/schema"
+	sqliteschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/sqlite/schema"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
-type Engine interface{ auditschema.Profile }
+type Engine interface{ auditmigration.Profile }
 
 var engineFactories = map[ormdialect.Name]func() Engine{
 	ormdialect.SQLite:   func() Engine { return sqliteschema.Profile{} },

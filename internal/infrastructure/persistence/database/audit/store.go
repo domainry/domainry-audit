@@ -9,7 +9,7 @@ import (
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/query"
 )
 
 type executor interface {
@@ -19,10 +19,10 @@ type executor interface {
 
 type Store struct {
 	db       modulehost.Database
-	renderer ormbuilder.Renderer
+	renderer query.Renderer
 }
 
-func NewStore(db modulehost.Database, renderer ormbuilder.Renderer) *Store {
+func NewStore(db modulehost.Database, renderer query.Renderer) *Store {
 	return &Store{db: db, renderer: renderer}
 }
 
@@ -94,14 +94,14 @@ func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.E
 	if err != nil {
 		return fmt.Errorf("encode audit after: %w", err)
 	}
-	query, args, err := ormbuilder.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
+	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
 	if err != nil {
 		return err
 	}
-	if _, err = exec.ExecContext(ctx, query, args...); err != nil {
-		lookup, lookupArgs, buildErr := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).
+	if _, err = exec.ExecContext(ctx, queryValue, args...); err != nil {
+		lookup, lookupArgs, buildErr := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).
 			Columns("event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
-			Where(ormbuilder.Equal("id", event.ID)).Limit(1).Build()
+			Where(query.Equal("id", event.ID)).Limit(1).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build audit event replay lookup: %w", buildErr)
 		}
@@ -115,75 +115,75 @@ func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.E
 	return nil
 }
 
-func (s *Store) List(ctx context.Context, workspaceID string, query contract.Query) ([]contract.Event, error) {
+func (s *Store) List(ctx context.Context, workspaceID string, queryValue contract.Query) ([]contract.Event, error) {
 	if strings.TrimSpace(workspaceID) == "" {
 		return nil, fmt.Errorf("audit query workspace is required")
 	}
-	return s.list(ctx, strings.TrimSpace(workspaceID), true, query)
+	return s.list(ctx, strings.TrimSpace(workspaceID), true, queryValue)
 }
 
-func (s *Store) ListSystem(ctx context.Context, query contract.Query) ([]contract.Event, error) {
-	return s.list(ctx, "", false, query)
+func (s *Store) ListSystem(ctx context.Context, queryValue contract.Query) ([]contract.Event, error) {
+	return s.list(ctx, "", false, queryValue)
 }
 
-func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query contract.Query) ([]contract.Event, error) {
-	limit := query.Limit
+func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, queryValue contract.Query) ([]contract.Event, error) {
+	limit := queryValue.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > 1000 {
 		limit = 1000
 	}
-	predicates := []ormbuilder.Predicate{}
+	predicates := []query.Predicate{}
 	addEqual := func(column, value string) {
 		if value = strings.TrimSpace(value); value != "" {
-			predicates = append(predicates, ormbuilder.Equal(column, value))
+			predicates = append(predicates, query.Equal(column, value))
 		}
 	}
-	addEqual("object_key", query.ObjectKey)
-	addEqual("record_id", query.RecordID)
-	addEqual("event", query.Event)
-	addEqual("actor_id", query.ActorID)
-	addEqual("role_key", query.RoleKey)
+	addEqual("object_key", queryValue.ObjectKey)
+	addEqual("record_id", queryValue.RecordID)
+	addEqual("event", queryValue.Event)
+	addEqual("actor_id", queryValue.ActorID)
+	addEqual("role_key", queryValue.RoleKey)
 	eventClassValue := auditEventClassExpression()
-	switch strings.TrimSpace(query.Class) {
+	switch strings.TrimSpace(queryValue.Class) {
 	case contract.EventClassOperations:
 		predicates = append(predicates, auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations)))
 	case contract.EventClassGovernance:
 		operations := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations))
 		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
-		predicates = append(predicates, ormbuilder.And(ormbuilder.Not(operations), governance))
+		predicates = append(predicates, query.And(query.Not(operations), governance))
 	case contract.EventClassBusiness:
 		operations := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations))
 		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
-		predicates = append(predicates, ormbuilder.And(ormbuilder.Not(operations), ormbuilder.Not(governance)))
+		predicates = append(predicates, query.And(query.Not(operations), query.Not(governance)))
 	}
-	if value := strings.TrimSpace(query.CreatedFrom); value != "" {
-		predicates = append(predicates, ormbuilder.GreaterThanOrEqual("created_at", value))
+	if value := strings.TrimSpace(queryValue.CreatedFrom); value != "" {
+		predicates = append(predicates, query.GreaterThanOrEqual("created_at", value))
 	}
-	if value := strings.TrimSpace(query.CreatedTo); value != "" {
-		predicates = append(predicates, ormbuilder.LessThanOrEqual("created_at", value))
+	if value := strings.TrimSpace(queryValue.CreatedTo); value != "" {
+		predicates = append(predicates, query.LessThanOrEqual("created_at", value))
 	}
-	if value := strings.TrimSpace(query.RequestID); value != "" {
+	if value := strings.TrimSpace(queryValue.RequestID); value != "" {
 		encoded, _ := json.Marshal(value)
-		predicates = append(predicates, ormbuilder.LikeEscaped("metadata_json", "%"+escapeSQLLike(`"request_id":`+string(encoded))+"%"))
+		predicates = append(predicates, query.LikeEscaped("metadata_json", "%"+escapeSQLLike(`"request_id":`+string(encoded))+"%"))
 	}
-	if value := strings.TrimSpace(query.Cursor); value != "" {
+	if value := strings.TrimSpace(queryValue.Cursor); value != "" {
 		cursor, err := contract.DecodeCursor(value)
 		if err != nil {
 			return nil, fmt.Errorf("decode audit event cursor: %w", err)
 		}
-		predicates = append(predicates, ormbuilder.Or(ormbuilder.LessThan("created_at", cursor.CreatedAt), ormbuilder.And(ormbuilder.Equal("created_at", cursor.CreatedAt), ormbuilder.LessThan("id", cursor.ID))))
+		predicates = append(predicates, query.Or(query.LessThan("created_at", cursor.CreatedAt), query.And(query.Equal("created_at", cursor.CreatedAt), query.LessThan("id", cursor.ID))))
 	}
-	var b *ormbuilder.SelectBuilder
+	var b *query.SelectBuilder
 	if scoped {
-		b = ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID)
+		b = query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID)
 	} else {
-		b = ormbuilder.NewSelectBuilder(s.renderer, "_audit_events")
+		b = query.NewSelectBuilder(s.renderer, "_audit_events")
 	}
-	b.Columns("id", "workspace_id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(ormbuilder.Descending("created_at"), ormbuilder.Descending("id")).Limit(limit)
+	b.Columns("id", "workspace_id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit)
 	if len(predicates) > 0 {
-		b.Where(ormbuilder.And(predicates...))
+		b.Where(query.And(predicates...))
 	}
 	statement, args, err := b.Build()
 	if err != nil {
@@ -210,38 +210,38 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	return result, rows.Err()
 }
 
-func (s *Store) Options(ctx context.Context, workspaceID string, query contract.OptionQuery) ([]contract.Option, error) {
+func (s *Store) Options(ctx context.Context, workspaceID string, queryValue contract.OptionQuery) ([]contract.Option, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
 		return nil, fmt.Errorf("audit option workspace is required")
 	}
-	field := strings.TrimSpace(query.Field)
+	field := strings.TrimSpace(queryValue.Field)
 	switch field {
 	case "record_id", "actor_id", "role_key", "event":
 	default:
 		return nil, fmt.Errorf("unsupported audit option field %q", field)
 	}
-	limit := query.Limit
+	limit := queryValue.Limit
 	if limit <= 0 {
 		limit = 10
 	} else if limit > 50 {
 		limit = 50
 	}
-	predicates := []ormbuilder.Predicate{ormbuilder.NotEqual(field, "")}
-	if value := strings.TrimSpace(query.ObjectKey); value != "" {
-		predicates = append(predicates, ormbuilder.Equal("object_key", value))
+	predicates := []query.Predicate{query.NotEqual(field, "")}
+	if value := strings.TrimSpace(queryValue.ObjectKey); value != "" {
+		predicates = append(predicates, query.Equal("object_key", value))
 	}
-	if value := strings.TrimSpace(query.CreatedFrom); value != "" {
-		predicates = append(predicates, ormbuilder.GreaterThanOrEqual("created_at", value))
+	if value := strings.TrimSpace(queryValue.CreatedFrom); value != "" {
+		predicates = append(predicates, query.GreaterThanOrEqual("created_at", value))
 	}
-	if value := strings.TrimSpace(query.CreatedTo); value != "" {
-		predicates = append(predicates, ormbuilder.LessThanOrEqual("created_at", value))
+	if value := strings.TrimSpace(queryValue.CreatedTo); value != "" {
+		predicates = append(predicates, query.LessThanOrEqual("created_at", value))
 	}
-	if value := strings.TrimSpace(query.Query); value != "" {
-		predicates = append(predicates, ormbuilder.LikeEscaped(field, "%"+escapeSQLLike(value)+"%"))
+	if value := strings.TrimSpace(queryValue.Query); value != "" {
+		predicates = append(predicates, query.LikeEscaped(field, "%"+escapeSQLLike(value)+"%"))
 	}
-	count := ormbuilder.CountAll()
-	statement, args, err := ormbuilder.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(ormbuilder.Project(ormbuilder.Column(field)), ormbuilder.Project(count)).Where(ormbuilder.And(predicates...)).GroupBy(ormbuilder.Column(field)).OrderBy(ormbuilder.DescendingExpression(count), ormbuilder.Ascending(field)).Limit(limit).Build()
+	count := query.CountAll()
+	statement, args, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).Projections(query.Project(query.Column(field)), query.Project(count)).Where(query.And(predicates...)).GroupBy(query.Column(field)).OrderBy(query.DescendingExpression(count), query.Ascending(field)).Limit(limit).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build audit option list: %w", err)
 	}
@@ -268,21 +268,21 @@ func escapeSQLLike(value string) string {
 	return strings.ReplaceAll(value, "_", "~_")
 }
 
-func auditEventClassExpression() ormbuilder.Expression {
-	return ormbuilder.Lower(ormbuilder.Concat(
-		ormbuilder.Coalesce(ormbuilder.Column("event"), ormbuilder.Value("")),
-		ormbuilder.Value(" "),
-		ormbuilder.Coalesce(ormbuilder.Column("object_key"), ormbuilder.Value("")),
+func auditEventClassExpression() query.Expression {
+	return query.Lower(query.Concat(
+		query.Coalesce(query.Column("event"), query.Value("")),
+		query.Value(" "),
+		query.Coalesce(query.Column("object_key"), query.Value("")),
 	))
 }
 
-func auditClassMarkerPredicate(value ormbuilder.Expression, markers []string) ormbuilder.Predicate {
-	predicates := make([]ormbuilder.Predicate, 0, len(markers))
+func auditClassMarkerPredicate(value query.Expression, markers []string) query.Predicate {
+	predicates := make([]query.Predicate, 0, len(markers))
 	for _, marker := range markers {
-		predicates = append(predicates, ormbuilder.LikeValueEscaped(value, "%"+escapeSQLLike(strings.ToLower(marker))+"%"))
+		predicates = append(predicates, query.LikeValueEscaped(value, "%"+escapeSQLLike(strings.ToLower(marker))+"%"))
 	}
 	if len(predicates) == 0 {
-		return ormbuilder.AlwaysFalse()
+		return query.AlwaysFalse()
 	}
-	return ormbuilder.Or(predicates...)
+	return query.Or(predicates...)
 }

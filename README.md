@@ -7,8 +7,14 @@ transaction.
 
 The module follows the standard Domainry boundaries:
 
-- `internal/domain` owns event construction and domain policy.
-- `internal/application` orchestrates append, query, lifecycle, and export use cases.
-- `internal/infrastructure` owns host-database persistence and schema installation.
-- `internal/module` owns embedded-module assembly.
+- `internal/domain/audit` owns event construction, export policy, and repository ports.
+- `internal/application/audit` orchestrates append, query, lifecycle, and export use cases.
+- `internal/adapter/auditsdk` adapts internal services to the public Audit SDK.
+- `internal/assembly/module` owns embedded-module composition.
+- `internal/infrastructure/persistence/database` owns Audit stores, migrations, and schema boundaries.
+- `internal/infrastructure/persistence/{sqlite,mysql,postgres}` owns dialect profiles.
 - root `module` is the stable, logic-free public facade used by hosts.
+
+Audit SDK v1 currently defines embedded Module mode only. This repository does
+not add placeholder SaaS assembly, HTTP transport, or an `audit-server` command;
+those boundaries belong with a deployment-neutral SDK protocol when introduced.

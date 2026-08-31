@@ -1,4 +1,4 @@
-package schema_test
+package migration_test
 
 import (
 	"strings"

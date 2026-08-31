@@ -2,7 +2,7 @@ package persistence
 
 import (
 	"github.com/domainry/domainry-audit-sdk/modulehost"
-	storeschema "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/schema"
+	auditmigration "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/migration"
 )
 
 func SchemaMigrations(renderer modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
@@ -10,5 +10,5 @@ func SchemaMigrations(renderer modulehost.Dialect, driver string) ([]modulehost.
 	if err != nil {
 		return nil, err
 	}
-	return storeschema.Migrations(renderer, engine)
+	return auditmigration.Migrations(renderer, engine)
 }

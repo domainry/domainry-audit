@@ -8,18 +8,18 @@ import (
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
-	internalmodule "github.com/domainry/domainry-audit/internal/module"
+	moduleassembly "github.com/domainry/domainry-audit/internal/assembly/module"
 )
 
-type Options = internalmodule.Options
-type Factory = internalmodule.Factory
+type Options = moduleassembly.Options
+type Factory = moduleassembly.Factory
 
-func NewFactory(options Options) *Factory { return internalmodule.NewFactory(options) }
-func OwnedTables() []string               { return internalmodule.OwnedTables() }
+func NewFactory(options Options) *Factory { return moduleassembly.NewFactory(options) }
+func OwnedTables() []string               { return moduleassembly.OwnedTables() }
 func SchemaMigrations(dialect modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
-	return internalmodule.SchemaMigrations(dialect, driver)
+	return moduleassembly.SchemaMigrations(dialect, driver)
 }
 
 func AppendPreparedWithin(ctx context.Context, dialect modulehost.Dialect, tx contract.Transaction, event contract.AuditEvent) error {
-	return internalmodule.AppendPreparedWithin(ctx, dialect, tx, event)
+	return moduleassembly.AppendPreparedWithin(ctx, dialect, tx, event)
 }

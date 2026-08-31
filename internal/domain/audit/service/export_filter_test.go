@@ -1,4 +1,4 @@
-package policy
+package service
 
 import (
 	"testing"
@@ -7,9 +7,9 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 )
 
-func TestNormalizeFiltersAppliesRetentionAndActorScope(t *testing.T) {
+func TestNormalizeExportFiltersAppliesRetentionAndActorScope(t *testing.T) {
 	now := time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC)
-	filters, err := NormalizeFilters(contract.ExportRequest{}, contract.ExportPrincipal{UserID: "user", RoleKey: "member"}, now)
+	filters, err := NormalizeExportFilters(contract.ExportRequest{}, contract.ExportPrincipal{UserID: "user", RoleKey: "member"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
