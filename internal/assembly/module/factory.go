@@ -14,6 +14,8 @@ import (
 	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
 	auditstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
+	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
+	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
 type Options struct{ Clock contractClock }
@@ -56,7 +58,19 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	auditService := auditapp.NewService(events, f.options.Clock)
 	exports := exportstore.NewStore(database, renderer)
 	exportService := auditapp.NewExportService(auditService, exports, auditService, f.options.Clock)
-	return auditsdkadapter.NewBinding(auditService, exportService, exports), nil
+	binding := auditsdkadapter.NewBinding(auditService, exportService, exports)
+	binding.SetApplicationHostBinder(func(host modulehost.AuditApplicationHost) ([]modulehttp.Surface, error) {
+		application, err := auditapp.NewAuditSurfaceApplicationService(auditService, exportService, host, f.options.Clock)
+		if err != nil {
+			return nil, err
+		}
+		surface, err := audithttp.NewAuditSurface(application)
+		if err != nil {
+			return nil, err
+		}
+		return []modulehttp.Surface{surface}, nil
+	})
+	return binding, nil
 }
 
 var _ auditsdk.Factory = (*Factory)(nil)

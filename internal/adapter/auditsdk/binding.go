@@ -3,17 +3,24 @@ package auditsdk
 
 import (
 	"context"
+	"errors"
+	"sync"
 
 	sdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/contract"
+	"github.com/domainry/domainry-audit-sdk/modulehost"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
+	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
 type Binding struct {
 	audit       *auditapp.Service
 	exports     *auditapp.ExportService
 	exportStore *exportstore.Store
+	mu          sync.RWMutex
+	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)
+	surfaces    []modulehttp.Surface
 }
 
 func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store) *Binding {
@@ -21,7 +28,7 @@ func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, export
 }
 
 func (b *Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, SubjectLifecycle: true}}
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: true, SubjectLifecycle: true, HTTPSurface: true}}
 }
 func (b *Binding) Factory() contract.EventFactory                        { return b.audit }
 func (b *Binding) Appender() contract.Appender                           { return b.audit }
@@ -33,4 +40,35 @@ func (b *Binding) ExportStore() contract.ExportStore                     { retur
 func (b *Binding) Exporter() contract.Exporter                           { return b.exports }
 func (b *Binding) Close(context.Context) error                           { return nil }
 
+func (b *Binding) SetApplicationHostBinder(bind func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)) {
+	b.mu.Lock()
+	b.bindHost = bind
+	b.mu.Unlock()
+}
+
+func (b *Binding) BindApplicationHost(host modulehost.AuditApplicationHost) error {
+	b.mu.RLock()
+	bind := b.bindHost
+	b.mu.RUnlock()
+	if bind == nil {
+		return errors.New("Audit application host binder is unavailable")
+	}
+	surfaces, err := bind(host)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.surfaces = append([]modulehttp.Surface(nil), surfaces...)
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return append([]modulehttp.Surface(nil), b.surfaces...)
+}
+
 var _ sdk.Binding = (*Binding)(nil)
+var _ sdk.ApplicationHostBinder = (*Binding)(nil)
+var _ modulehttp.Provider = (*Binding)(nil)
