@@ -9,6 +9,7 @@ import (
 
 	auditsdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	auditcapability "github.com/domainry/domainry-audit/capability"
 	auditsdkadapter "github.com/domainry/domainry-audit/internal/adapter/auditsdk"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
@@ -58,7 +59,14 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	auditService := auditapp.NewService(events, f.options.Clock)
 	exports := exportstore.NewStore(database, renderer)
 	exportService := auditapp.NewExportService(auditService, exports, auditService, f.options.Clock)
-	binding := auditsdkadapter.NewBinding(auditService, exportService, exports)
+	capability, err := auditcapability.Open(auditcapability.Inputs{})
+	if err != nil {
+		return nil, fmt.Errorf("build Audit capability disclosure: %w", err)
+	}
+	binding, err := auditsdkadapter.NewBinding(auditService, exportService, exports, capability)
+	if err != nil {
+		return nil, err
+	}
 	binding.SetApplicationHostBinder(func(host modulehost.AuditApplicationHost) ([]modulehttp.Surface, error) {
 		application, err := auditapp.NewAuditSurfaceApplicationService(auditService, exportService, host, f.options.Clock)
 		if err != nil {

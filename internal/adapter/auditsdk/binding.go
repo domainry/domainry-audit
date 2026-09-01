@@ -4,6 +4,7 @@ package auditsdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	sdk "github.com/domainry/domainry-audit-sdk"
@@ -11,6 +12,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/modulehost"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
+	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
@@ -21,10 +23,24 @@ type Binding struct {
 	mu          sync.RWMutex
 	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)
 	surfaces    []modulehttp.Surface
+	capability  modulecapability.Binding
 }
 
-func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store) *Binding {
-	return &Binding{audit: audit, exports: exports, exportStore: exportStore}
+func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store, capability modulecapability.Binding) (*Binding, error) {
+	if capability == nil {
+		return nil, fmt.Errorf("Audit capability binding is required")
+	}
+	return &Binding{audit: audit, exports: exports, exportStore: exportStore, capability: capability}, nil
+}
+
+func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
+	return b.capability.CapabilitySummary(ctx)
+}
+func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
+	return b.capability.CapabilityCategory(ctx, key)
+}
+func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+	return b.capability.ValidateCapabilityCandidate(ctx, request)
 }
 
 func (b *Binding) Descriptor() sdk.Descriptor {
