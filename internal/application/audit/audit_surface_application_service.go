@@ -13,7 +13,8 @@ import (
 
 const (
 	AuditPermissionBusinessRead     = "audit.business.read"
-	AuditPermissionBusinessExport   = "audit.business.export"
+	AuditPermissionBusinessExportPrepare  = "audit.business.export.prepare"
+	AuditPermissionBusinessExportDownload = "audit.business.export.download"
 	AuditPermissionGovernanceRead   = "audit.governance.read"
 	AuditPermissionGovernanceExport = "audit.governance.export"
 	AuditPermissionOperationsRead   = "audit.ops.read"
@@ -84,7 +85,7 @@ func (s *AuditSurfaceApplicationService) GovernanceEvents(ctx context.Context, q
 }
 
 func (s *AuditSurfaceApplicationService) ExportGovernanceEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
-	if err := requireAuditPermissions(principal, AuditPermissionGovernanceRead, AuditPermissionGovernanceExport); err != nil {
+	if err := requireAuditPermission(principal, AuditPermissionGovernanceExport); err != nil {
 		return AuditSurfaceResult{}, err
 	}
 	return s.surface(ctx, auditdomain.SurfaceGovernance, query, principal)
@@ -98,14 +99,14 @@ func (s *AuditSurfaceApplicationService) OperationsEvents(ctx context.Context, q
 }
 
 func (s *AuditSurfaceApplicationService) ExportOperationsEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
-	if err := requireAuditPermissions(principal, AuditPermissionOperationsRead, AuditPermissionOperationsExport); err != nil {
+	if err := requireAuditPermission(principal, AuditPermissionOperationsExport); err != nil {
 		return AuditSurfaceResult{}, err
 	}
 	return s.surface(ctx, auditdomain.SurfaceOperations, query, principal)
 }
 
 func (s *AuditSurfaceApplicationService) PrepareBusinessExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal modulehost.AuditSurfacePrincipal) (contract.ExportPrepared, error) {
-	if err := requireAuditPermissions(principal, AuditPermissionBusinessRead, AuditPermissionBusinessExport); err != nil {
+	if err := requireAuditPermission(principal, AuditPermissionBusinessExportPrepare); err != nil {
 		return contract.ExportPrepared{}, err
 	}
 	prepared, err := s.exports.PrepareExport(ctx, request, strings.TrimSpace(idempotencyKey), auditExportPrincipal(principal))
@@ -117,7 +118,7 @@ func (s *AuditSurfaceApplicationService) PrepareBusinessExport(ctx context.Conte
 }
 
 func (s *AuditSurfaceApplicationService) DownloadBusinessExport(ctx context.Context, token string, principal modulehost.AuditSurfacePrincipal) ([]byte, string, error) {
-	if err := requireAuditPermissions(principal, AuditPermissionBusinessRead, AuditPermissionBusinessExport); err != nil {
+	if err := requireAuditPermission(principal, AuditPermissionBusinessExportDownload); err != nil {
 		return nil, "", err
 	}
 	return s.exports.DownloadExport(ctx, strings.TrimSpace(token), auditExportPrincipal(principal))
@@ -144,7 +145,7 @@ func (s *AuditSurfaceApplicationService) authorizeExport(ctx context.Context, fi
 	if !ok {
 		return auditSurfaceError(apperror.KindForbidden, "backend.audit.export_scope_changed", nil)
 	}
-	if err := requireAuditPermissions(principal, AuditPermissionBusinessRead, AuditPermissionBusinessExport); err != nil {
+	if err := requireAuditPermission(principal, AuditPermissionBusinessExportPrepare); err != nil {
 		return err
 	}
 	if filter.ObjectKey == "" || filter.RecordID == "" {
@@ -159,13 +160,6 @@ func auditExportPrincipal(principal modulehost.AuditSurfacePrincipal) contract.E
 		RoleKey: principal.Identity.RoleKey, AuthorizationRevision: principal.AuthorizationRevision,
 		AuthorizationContext: principal,
 	}
-}
-
-func requireAuditPermissions(principal modulehost.AuditSurfacePrincipal, permissions ...string) error {
-	if len(permissions) == 0 || !principal.Identity.Known || !principal.Identity.HasAllPermissions(permissions) {
-		return auditSurfaceError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
-	}
-	return nil
 }
 
 func requireAuditPermission(principal modulehost.AuditSurfacePrincipal, permission string) error {

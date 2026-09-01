@@ -12,6 +12,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/modulehost"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
@@ -23,14 +24,22 @@ type Binding struct {
 	mu          sync.RWMutex
 	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)
 	surfaces    []modulehttp.Surface
+	actions     []actioncontract.ActionDefinition
 	capability  modulecapability.Binding
 }
 
-func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store, capability modulecapability.Binding) (*Binding, error) {
+func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store, capability modulecapability.Binding, actions []actioncontract.ActionDefinition) (*Binding, error) {
 	if capability == nil {
 		return nil, fmt.Errorf("Audit capability binding is required")
 	}
-	return &Binding{audit: audit, exports: exports, exportStore: exportStore, capability: capability}, nil
+	if len(actions) == 0 {
+		return nil, fmt.Errorf("Audit authorization Actions are required")
+	}
+	detached := make([]actioncontract.ActionDefinition, len(actions))
+	for index := range actions {
+		detached[index] = actioncontract.CloneDefinition(actions[index])
+	}
+	return &Binding{audit: audit, exports: exports, exportStore: exportStore, capability: capability, actions: detached}, nil
 }
 
 func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
@@ -85,6 +94,17 @@ func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
 	return append([]modulehttp.Surface(nil), b.surfaces...)
 }
 
+func (b *Binding) AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	result := make([]actioncontract.ActionDefinition, len(b.actions))
+	for index := range b.actions {
+		result[index] = actioncontract.CloneDefinition(b.actions[index])
+	}
+	return result, nil
+}
+
 var _ sdk.Binding = (*Binding)(nil)
 var _ sdk.ApplicationHostBinder = (*Binding)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)
+var _ actioncontract.Provider = (*Binding)(nil)

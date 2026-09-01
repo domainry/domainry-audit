@@ -14,7 +14,7 @@ func NewCapabilityBinding() (*modulecapability.StaticBinding, error) {
 	operations := surface.OpenAPIOperations()
 	groups := map[string][]modulehttp.Route{}
 	for _, route := range allRoutes {
-		groups[auditCapabilityCategory(route.Pattern)] = append(groups[auditCapabilityCategory(route.Pattern)], route)
+		groups[auditCapabilityCategory(route.Pattern())] = append(groups[auditCapabilityCategory(route.Pattern())], route)
 	}
 	keys := []string{"audit.business", "audit.governance", "audit.operations"}
 	documents := make([]modulecapability.CategoryDocument, 0, len(keys))

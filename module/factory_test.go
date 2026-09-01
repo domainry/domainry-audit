@@ -103,6 +103,24 @@ func TestModuleUsesBorrowedHostDatabase(t *testing.T) {
 	}
 }
 
+func TestAuthorizationActionsExposeGovernancePageFromSourceSurface(t *testing.T) {
+	actions := AuthorizationActions()
+	found := false
+	for _, action := range actions {
+		if action.Key != "audit.governance.read" {
+			continue
+		}
+		found = action.Permission != nil && action.Permission.Key == action.Key && len(action.Pages) == 1 && action.Pages[0].Route == "/admin/system/audit"
+	}
+	if !found {
+		t.Fatalf("governance page Action missing from source projection: %#v", actions)
+	}
+	actions[0].Key = "mutated"
+	if next := AuthorizationActions(); len(next) == 0 || next[0].Key == "mutated" {
+		t.Fatal("AuthorizationActions leaked mutable source state")
+	}
+}
+
 func TestTransactionalAppendClassificationReplayAndSubjectLifecycle(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -218,8 +236,8 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 		auditClass string
 	}{
 		"GET /business/audit-events":                          {"audit.business.read", "business_audit_read"},
-		"POST /business/audit-event-exports":                  {"audit.business.export", "business_audit_export_prepare_audit"},
-		"GET /business/audit-event-exports/downloads/{token}": {"audit.business.export", "business_audit_export_download_audit"},
+		"POST /business/audit-event-exports":                  {"audit.business.export.prepare", "business_audit_export_prepare_audit"},
+		"GET /business/audit-event-exports/downloads/{token}": {"audit.business.export.download", "business_audit_export_download_audit"},
 		"GET /tenant-admin/audit-events":                      {"audit.governance.read", "tenant_governance_audit_read"},
 		"GET /tenant-admin/audit-events/export":               {"audit.governance.export", "tenant_governance_audit_export"},
 		"GET /operations/audit-events":                        {"audit.ops.read", "operations_audit_read"},
@@ -230,14 +248,15 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 		t.Fatalf("business Audit Runtime client method=%v", method)
 	}
 	for _, route := range surface.Routes() {
-		expected, ok := expectedRoutes[route.Pattern]
-		if !ok || route.Permission != expected.permission || route.Governance == nil || route.Governance.AuditClass != expected.auditClass {
+		pattern := route.Pattern()
+		expected, ok := expectedRoutes[pattern]
+		if !ok || route.Action.Permission == nil || route.Action.Permission.Key != expected.permission || route.Action.AuditClass != expected.auditClass {
 			t.Fatalf("unexpected Audit route contract: %#v", route)
 		}
-		if operations[route.Pattern] == nil {
-			t.Fatalf("Audit route %q has no owner OpenAPI operation", route.Pattern)
+		if operations[pattern] == nil {
+			t.Fatalf("Audit route %q has no owner OpenAPI operation", pattern)
 		}
-		delete(expectedRoutes, route.Pattern)
+		delete(expectedRoutes, pattern)
 	}
 	if len(expectedRoutes) != 0 {
 		t.Fatalf("missing Audit routes: %#v", expectedRoutes)

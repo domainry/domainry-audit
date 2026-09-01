@@ -63,7 +63,7 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	if err != nil {
 		return nil, fmt.Errorf("build Audit capability disclosure: %w", err)
 	}
-	binding, err := auditsdkadapter.NewBinding(auditService, exportService, exports, capability)
+	binding, err := auditsdkadapter.NewBinding(auditService, exportService, exports, capability, audithttp.AuthorizationActions())
 	if err != nil {
 		return nil, err
 	}

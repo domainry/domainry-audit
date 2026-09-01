@@ -1,38 +1,54 @@
 package module
 
-func (*AuditSurface) OpenAPIOperations() map[string]map[string]any {
+import auditapp "github.com/domainry/domainry-audit/internal/application/audit"
+
+func (surface *AuditSurface) OpenAPIOperations() map[string]map[string]any {
+	byAction := auditOpenAPIOperationsByAction()
+	result := make(map[string]map[string]any, len(byAction))
+	for _, route := range surface.Routes() {
+		if operation := byAction[route.Action.Key]; operation != nil {
+			result[route.Pattern()] = operation
+		}
+	}
+	return result
+}
+
+// auditOpenAPIOperationsByAction owns only action-specific schemas and prose.
+// Method/path and authorization/governance facts are projected from the
+// canonical Action manifest by AuditSurface and modulecapability.
+func auditOpenAPIOperationsByAction() map[string]map[string]any {
 	security := []any{map[string]any{"BearerAuth": []any{}}}
 	queryParameters := auditOpenAPIQueryParameters()
 	return map[string]map[string]any{
-		"GET /business/audit-events": {
+		auditapp.AuditPermissionBusinessRead: {
 			"operationId": "listBusinessAuditEventPage", "tags": []string{"Audit Business"}, "summary": "List one actor- or record-scoped business audit page with stable keyset continuation",
 			"security": security, "parameters": queryParameters, "responses": auditOpenAPIJSONResponses("200", "Bounded business audit event page", auditOpenAPIPageSchema(auditOpenAPIEventSchema("business"))),
 			"x-domainry-runtime-client-method": "listBusinessAuditEventPage",
 		},
-		"POST /business/audit-event-exports": {
+		auditapp.AuditPermissionBusinessExportPrepare: {
 			"operationId": "prepareBusinessAuditEventExport", "tags": []string{"Audit Business"}, "summary": "Prepare immutable business audit-event CSV bytes under the current workspace and data scope",
 			"security": security, "requestBody": auditOpenAPIJSONRequest(auditOpenAPIExportRequestSchema()), "responses": auditOpenAPIJSONResponses("201", "Prepared business audit-event export", auditOpenAPIExportPreparedSchema()),
 		},
-		"GET /business/audit-event-exports/downloads/{token}": {
+		auditapp.AuditPermissionBusinessExportDownload: {
 			"operationId": "downloadBusinessAuditEventExport", "tags": []string{"Audit Business"}, "summary": "Download a short-lived business audit-event export after current permission and data-scope revalidation",
 			"security": security, "parameters": []any{auditOpenAPIPathParameter("token", "Short-lived download token")}, "responses": map[string]any{
 				"200": map[string]any{"description": "Business audit-event CSV", "content": map[string]any{"text/csv": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}},
 				"401": map[string]any{"description": "Authentication required"}, "403": map[string]any{"description": "Forbidden"}, "404": map[string]any{"description": "Export not found"}, "default": auditOpenAPIErrorResponse(),
 			},
 		},
-		"GET /tenant-admin/audit-events": {
+		auditapp.AuditPermissionGovernanceRead: {
 			"operationId": "listTenantGovernanceAuditEvents", "tags": []string{"Audit Administration"}, "summary": "List tenant governance audit events",
 			"security": security, "parameters": queryParameters, "responses": auditOpenAPIJSONResponses("200", "Tenant governance audit events", auditOpenAPIPageSchema(auditOpenAPIEventSchema("governance"))),
 		},
-		"GET /tenant-admin/audit-events/export": {
+		auditapp.AuditPermissionGovernanceExport: {
 			"operationId": "exportTenantGovernanceAuditEvents", "tags": []string{"Audit Administration"}, "summary": "Export tenant governance audit events as JSON",
 			"security": security, "parameters": queryParameters, "responses": auditOpenAPIJSONResponses("200", "Tenant governance audit export", auditOpenAPIPageSchema(auditOpenAPIEventSchema("governance"))),
 		},
-		"GET /operations/audit-events": {
+		auditapp.AuditPermissionOperationsRead: {
 			"operationId": "listOperationsAuditEvents", "tags": []string{"Audit Operations"}, "summary": "List technical and security audit events",
 			"security": security, "parameters": queryParameters, "responses": auditOpenAPIJSONResponses("200", "Operations audit events", auditOpenAPIPageSchema(auditOpenAPIEventSchema("operations"))),
 		},
-		"GET /operations/audit-events/export": {
+		auditapp.AuditPermissionOperationsExport: {
 			"operationId": "exportOperationsAuditEvents", "tags": []string{"Audit Operations"}, "summary": "Export technical and security audit events as JSON",
 			"security": security, "parameters": queryParameters, "responses": auditOpenAPIJSONResponses("200", "Operations audit export", auditOpenAPIPageSchema(auditOpenAPIEventSchema("operations"))),
 		},
