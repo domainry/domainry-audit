@@ -43,14 +43,11 @@ type SurfaceResult struct {
 	RetentionDays              int
 }
 
-func PlanSurface(kind SurfaceKind, query contract.Query, actorID string, now time.Time) (SurfacePlan, error) {
+func PlanSurface(kind SurfaceKind, query contract.Query, _ string, now time.Time) (SurfacePlan, error) {
 	days, class := 0, ""
 	switch kind {
 	case SurfaceBusiness:
 		days, class = BusinessRetentionDays, "business_history"
-		if strings.TrimSpace(query.ObjectKey) == "" || strings.TrimSpace(query.RecordID) == "" {
-			query.ActorID = actorID
-		}
 		if query.Limit > BusinessMaxPageSize {
 			query.Limit = BusinessMaxPageSize
 		}

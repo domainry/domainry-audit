@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
+	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	auditservice "github.com/domainry/domainry-audit/internal/domain/audit/service"
 )
 
@@ -12,6 +13,7 @@ type Store interface {
 	contract.PreparedAppender
 	contract.Reader
 	contract.SubjectLifecycle
+	ListWithinDataScope(context.Context, string, contract.Query, auditrepository.DataScope) ([]contract.Event, error)
 }
 
 type Service struct {
@@ -51,6 +53,9 @@ func (s *Service) AppendPreparedWithin(ctx context.Context, tx contract.Transact
 }
 func (s *Service) List(ctx context.Context, workspaceID string, query contract.Query) ([]contract.Event, error) {
 	return s.store.List(ctx, workspaceID, query)
+}
+func (s *Service) ListWithinDataScope(ctx context.Context, workspaceID string, query contract.Query, scope auditrepository.DataScope) ([]contract.Event, error) {
+	return s.store.ListWithinDataScope(ctx, workspaceID, query, scope)
 }
 func (s *Service) ListSystem(ctx context.Context, query contract.Query) ([]contract.Event, error) {
 	return s.store.ListSystem(ctx, query)

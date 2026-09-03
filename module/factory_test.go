@@ -13,6 +13,7 @@ import (
 	auditsdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
@@ -250,7 +251,7 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 	for _, route := range surface.Routes() {
 		pattern := route.Pattern()
 		expected, ok := expectedRoutes[pattern]
-		if !ok || route.Action.Permission == nil || route.Action.Permission.Key != expected.permission || route.Action.AuditClass != expected.auditClass {
+		if !ok || route.Action.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || route.Action.Permission == nil || route.Action.Permission.Key != expected.permission || route.Action.AuditClass != expected.auditClass {
 			t.Fatalf("unexpected Audit route contract: %#v", route)
 		}
 		if operations[pattern] == nil {
@@ -302,21 +303,119 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 	}
 }
 
-func auditHTTPTestPrincipal() identitysdk.Principal {
-	permissions := []string{
-		"audit.business.read", "audit.business.export", "audit.governance.read", "audit.governance.export", "audit.ops.read", "audit.ops.export",
+func TestAuditHTTPSurfaceKeepsExactPermissionDataScopesIndependent(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
 	}
-	grants := make([]identitysdk.FunctionGrant, 0, len(permissions))
-	for _, permission := range permissions {
-		for index := len(permission) - 1; index >= 0; index-- {
-			if permission[index] == '.' {
-				grants = append(grants, identitysdk.FunctionGrant{Resource: identitysdk.ResourceType(permission[:index]), Action: identitysdk.Action(permission[index+1:]), Effect: identitysdk.EffectAllow})
-				break
-			}
+	defer db.Close()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	binding, err := NewFactory(Options{Clock: fixedClock{now}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, newTestHost(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []contract.AppendRequest{
+		{Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
+		{Event: "order.completed", ObjectKey: "order", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
+		{Event: "identity.role.changed", ObjectKey: "role", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
+		{Event: "identity.role.changed", ObjectKey: "role", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
+	} {
+		if _, err := binding.Appender().Append(t.Context(), event); err != nil {
+			t.Fatal(err)
 		}
 	}
-	bundle := identitysdk.AccessBundle{ContractVersion: identitysdk.CurrentPolicyBundleVersion, FunctionGrants: grants}
-	return identitysdk.Principal{
-		ContractVersion: identitysdk.PrincipalContextContractVersion, Known: true, WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1", AccessBundle: &bundle,
+	binder := binding.(auditsdk.ApplicationHostBinder)
+	if err := binder.BindApplicationHost(testAuditApplicationHost{key: []byte("0123456789abcdef0123456789abcdef")}); err != nil {
+		t.Fatal(err)
 	}
+	surface := binding.(modulehttp.Provider).HTTPSurfaces()[0]
+	principal := auditHTTPTestPrincipalWithScopes("user", map[string][]identitysdk.DataScope{
+		"audit.business.read":   {identitysdk.DataScopeOwner},
+		"audit.governance.read": {identitysdk.DataScopeAll},
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/business/audit-events?actor_id=other", nil)
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
+	response := httptest.NewRecorder()
+	surface.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("business status=%d body=%s", response.Code, response.Body.String())
+	}
+	var businessPage struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &businessPage); err != nil || businessPage.Count != 0 {
+		t.Fatalf("owner business page=%#v err=%v", businessPage, err)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/tenant-admin/audit-events", nil)
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
+	response = httptest.NewRecorder()
+	surface.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("governance status=%d body=%s", response.Code, response.Body.String())
+	}
+	var governancePage struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &governancePage); err != nil || governancePage.Count != 2 {
+		t.Fatalf("all governance page=%#v err=%v", governancePage, err)
+	}
+}
+
+func auditHTTPTestPrincipal() identitysdk.Principal {
+	return auditHTTPTestPrincipalWithScopes("user", map[string][]identitysdk.DataScope{
+		"audit.business.read":            {identitysdk.DataScopeAll},
+		"audit.business.export.prepare":  {identitysdk.DataScopeAll},
+		"audit.business.export.download": {identitysdk.DataScopeAll},
+		"audit.governance.read":          {identitysdk.DataScopeAll},
+		"audit.governance.export":        {identitysdk.DataScopeAll},
+		"audit.ops.read":                 {identitysdk.DataScopeAll},
+		"audit.ops.export":               {identitysdk.DataScopeAll},
+	})
+}
+
+func auditHTTPTestPrincipalWithScopes(userID string, permissions map[string][]identitysdk.DataScope) identitysdk.Principal {
+	grants := make([]identitysdk.FunctionGrant, 0, len(permissions))
+	policies := make([]identitysdk.DataPolicy, 0, len(permissions))
+	for permission, scopes := range permissions {
+		for index := len(permission) - 1; index >= 0; index-- {
+			if permission[index] != '.' {
+				continue
+			}
+			resource, action := identitysdk.ResourceType(permission[:index]), identitysdk.Action(permission[index+1:])
+			grants = append(grants, identitysdk.FunctionGrant{Resource: resource, Action: action, Effect: identitysdk.EffectAllow})
+			policies = append(policies, identitysdk.DataPolicy{Key: "data-" + permission, Resource: resource, Action: action, Effect: identitysdk.EffectAllow, DataScopes: append([]identitysdk.DataScope(nil), scopes...), Predicate: auditHTTPTestScopePredicate(scopes)})
+			break
+		}
+	}
+	bundle := identitysdk.AccessBundle{
+		ContractVersion: identitysdk.CurrentPolicyBundleVersion, AuthorizationRevision: "r1", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		Subject: identitysdk.Subject{WorkspaceID: "workspace", SubjectID: identitysdk.SubjectID(userID)}, FunctionGrants: grants, DataPolicies: policies,
+	}
+	return identitysdk.Principal{
+		ContractVersion: identitysdk.PrincipalContextContractVersion, Known: true, WorkspaceID: "workspace", UserID: userID, RoleKey: "member", AuthorizationRevision: "r1", AccessBundle: &bundle,
+	}
+}
+
+func auditHTTPTestScopePredicate(scopes []identitysdk.DataScope) identitysdk.Predicate {
+	parts := make([]identitysdk.Predicate, 0, len(scopes))
+	for _, scope := range scopes {
+		switch scope {
+		case identitysdk.DataScopeAll:
+			return identitysdk.Predicate{}
+		case identitysdk.DataScopeOwner:
+			parts = append(parts, identitysdk.Predicate{Fact: "owner_user_id", Operator: identitysdk.OperatorEqual, Value: "$subject.id"})
+		case identitysdk.DataScopeOrg:
+			parts = append(parts, identitysdk.Predicate{Fact: "owner_org_id", Operator: identitysdk.OperatorEqual, Value: "$subject.org_id"})
+		case identitysdk.DataScopeOrgChild:
+			parts = append(parts, identitysdk.Predicate{Fact: "owner_org_id", Operator: identitysdk.OperatorIn, Value: "$subject.org_scope_ids"})
+		case identitysdk.DataScopeTargetOrg:
+			parts = append(parts, identitysdk.Predicate{Fact: "owner_org_id", Operator: identitysdk.OperatorIn, Value: "$subject.support_org_scope_ids"})
+		}
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return identitysdk.Predicate{Any: parts}
 }

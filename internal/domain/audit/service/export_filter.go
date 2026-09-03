@@ -13,7 +13,7 @@ const retentionDays = 365
 
 var filterValue = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}$`)
 
-func NormalizeExportFilters(request contract.ExportRequest, principal contract.ExportPrincipal, now time.Time) (contract.ExportFilter, error) {
+func NormalizeExportFilters(request contract.ExportRequest, _ contract.ExportPrincipal, now time.Time) (contract.ExportFilter, error) {
 	if format := strings.ToLower(strings.TrimSpace(request.Format)); format != "" && format != "csv" {
 		return contract.ExportFilter{}, exportError("export_format_invalid", nil)
 	}
@@ -41,15 +41,6 @@ func NormalizeExportFilters(request contract.ExportRequest, principal contract.E
 	cutoff := now.AddDate(0, 0, -retentionDays).Format(time.RFC3339)
 	if filters.CreatedFrom == "" || filters.CreatedFrom < cutoff {
 		filters.CreatedFrom = cutoff
-	}
-	if filters.ObjectKey == "" || filters.RecordID == "" {
-		if filters.ActorID != "" && filters.ActorID != principal.UserID {
-			return filters, exportError("export_actor_scope_denied", nil)
-		}
-		filters.ActorID = principal.UserID
-		if filters.RoleKey != "" && filters.RoleKey != principal.RoleKey {
-			return filters, exportError("export_role_scope_denied", nil)
-		}
 	}
 	return filters, nil
 }

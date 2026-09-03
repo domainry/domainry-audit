@@ -7,13 +7,13 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 )
 
-func TestBusinessSurfaceOwnsActorScopePaginationRetentionAndRedaction(t *testing.T) {
+func TestBusinessSurfaceOwnsPaginationRetentionAndRedaction(t *testing.T) {
 	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	plan, err := PlanSurface(SurfaceBusiness, contract.Query{Limit: 1}, "actor-1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Query.ActorID != "actor-1" || plan.Query.Limit != 2 || plan.PageSize != 1 || plan.RetentionDays != BusinessRetentionDays || plan.Query.Class != "business" {
+	if plan.Query.ActorID != "" || plan.Query.Limit != 2 || plan.PageSize != 1 || plan.RetentionDays != BusinessRetentionDays || plan.Query.Class != "business" {
 		t.Fatalf("business plan=%#v", plan)
 	}
 	result := ProjectSurface([]contract.Event{

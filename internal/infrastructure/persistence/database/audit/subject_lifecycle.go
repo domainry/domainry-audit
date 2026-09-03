@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/domainry/domainry-orm/query"
@@ -52,18 +54,43 @@ func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string)
 }
 
 func (s *Store) EraseSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
+	workspaceID, identity = strings.TrimSpace(workspaceID), strings.TrimSpace(identity)
+	if workspaceID == "" || identity == "" {
+		return nil, fmt.Errorf("audit subject identity is required")
+	}
 	sum := sha256.Sum256([]byte(workspaceID + "\x00" + identity))
 	anonymous := "erased-" + hex.EncodeToString(sum[:12])
-	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).Set("actor_id", anonymous).Where(query.Equal("actor_id", identity)).Build()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.db.ExecContext(ctx, statement, args...)
+	defer func() { _ = tx.Rollback() }()
+	candidate, candidateArgs, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).
+		Projections(query.Project(query.CountAll())).Where(query.Equal("actor_id", identity)).Build()
+	if err != nil {
+		return nil, err
+	}
+	var expected int64
+	if err := tx.QueryRowContext(ctx, candidate, candidateArgs...).Scan(&expected); err != nil {
+		return nil, err
+	}
+	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).
+		Set("actor_id", anonymous).Where(query.Equal("actor_id", identity)).Build()
+	if err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
+		return nil, err
+	}
+	if changed != expected {
+		return nil, fmt.Errorf("audit subject candidate set changed during anonymization")
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return json.Marshal(map[string]any{"anonymized_audit_references": changed, "event_integrity_preserved": true, "at": time.Now().UTC()})

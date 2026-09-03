@@ -21,3 +21,24 @@ publishes its product HTTP Surface after the host supplies the narrow
 cross-owner record access and field-projection capabilities. This repository
 does not add placeholder SaaS assembly or an `audit-server` command; those
 boundaries require a deployment-neutral remote protocol first.
+
+## Data authorization
+
+Every product route requires its own exact Permission function grant and the
+data policy for that same key. Audit translates only `all`, `owner`, `org`,
+`org_child`, and `target_org`, then passes the resolved boundary explicitly to
+its repositories. `all` adds no range predicate; every other scope is applied
+inside the workspace-scoped SQL query.
+
+Audit events use `actor_id` as their natural owner. Organization visibility is
+based on the event-time `actor_org_id` snapshot supplied in event metadata and
+projected into the Audit table; rows without that evidence fail closed for
+organization scopes. Export artifacts remain requester-owned through
+`requester_user_id`; because they have no reliable organization fact,
+organization-only artifact access fails closed instead of consulting mutable
+directory state.
+
+The SDK `Reader`, `ExportStore`, append, and subject-lifecycle ports are trusted
+module-integration capabilities rather than end-user authorization surfaces.
+Product HTTP requests must use the scoped application services assembled after
+`BindApplicationHost`.

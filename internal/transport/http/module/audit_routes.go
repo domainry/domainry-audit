@@ -74,7 +74,7 @@ func (*AuditSurface) Routes() []modulehttp.Route {
 		action := actioncontract.ActionDefinition{
 			Key: permission, Owner: "module:audit", SourceKind: "module_surface", CapabilityKey: "audit.product", CapabilityLabel: "Audit",
 			OperationKey: permission[separator+1:], OperationLabel: label, Label: label, Exposures: exposures,
-			Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
+			Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 			HTTP:          &actioncontract.HTTPBinding{Method: method, RouteTemplate: path}, Permission: &actioncontract.PermissionDefinition{
 				Key: permission, Owner: "module:audit", ResourceKey: permission[:separator], OperationKey: permission[separator+1:], Label: label, Category: "Audit", LifecycleStatus: actioncontract.LifecycleActive,
 			},

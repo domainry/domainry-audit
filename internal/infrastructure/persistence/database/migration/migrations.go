@@ -2,6 +2,7 @@ package migration
 
 import (
 	"fmt"
+
 	ormschema "github.com/domainry/domainry-orm/schema"
 
 	"github.com/domainry/domainry-audit-sdk/modulehost"
@@ -62,9 +63,18 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if err != nil {
 		return nil, err
 	}
+	actorOrgColumn, _, err := ormschema.NewAddColumn(renderer, "_audit_events", ormschema.Column("actor_org_id", ormschema.TextKey(191))).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Audit actor organization column: %w", err)
+	}
+	actorOrgIndex, _, err := ormschema.NewIndex(renderer, "idx_audit_event_actor_org_cursor", "_audit_events").Columns("workspace_id", "actor_org_id", "created_at", "id").Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Audit actor organization index: %w", err)
+	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "audit_events", Statements: []string{eventTable}, Baseline: &baseline},
 		{Version: 2, Name: "audit_exports_and_indexes", Statements: exportStatements},
+		{Version: 3, Name: "audit_event_actor_organization_scope", Statements: []string{actorOrgColumn, actorOrgIndex}},
 	}, nil
 }
 

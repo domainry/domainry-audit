@@ -12,6 +12,7 @@ import (
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	"github.com/domainry/domainry-orm/query"
 )
 
@@ -56,7 +57,22 @@ func (s *Store) CreateOrGetExport(ctx context.Context, artifact contract.ExportA
 }
 
 func (s *Store) ExportByTokenHash(ctx context.Context, workspaceID, tokenHash string) (contract.ExportArtifact, bool, error) {
-	statement, args, err := s.exportSelect(workspaceID).Where(query.Equal("token_sha256", strings.TrimSpace(tokenHash))).Limit(1).Build()
+	return s.exportByTokenHashWithinDataScope(ctx, workspaceID, tokenHash, "", auditrepository.AllDataScope())
+}
+
+func (s *Store) ExportByTokenHashWithinDataScope(ctx context.Context, workspaceID, tokenHash, requesterUserID string, scope auditrepository.DataScope) (contract.ExportArtifact, bool, error) {
+	return s.exportByTokenHashWithinDataScope(ctx, workspaceID, tokenHash, requesterUserID, scope)
+}
+
+func (s *Store) exportByTokenHashWithinDataScope(ctx context.Context, workspaceID, tokenHash, requesterUserID string, scope auditrepository.DataScope) (contract.ExportArtifact, bool, error) {
+	predicates := []query.Predicate{query.Equal("token_sha256", strings.TrimSpace(tokenHash))}
+	if requesterUserID = strings.TrimSpace(requesterUserID); requesterUserID != "" {
+		predicates = append(predicates, query.Equal("requester_user_id", requesterUserID))
+	}
+	if scopePredicate := exportArtifactDataScopePredicate(scope); scopePredicate != nil {
+		predicates = append(predicates, scopePredicate)
+	}
+	statement, args, err := s.exportSelect(workspaceID).Where(query.And(predicates...)).Limit(1).Build()
 	if err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
@@ -64,30 +80,75 @@ func (s *Store) ExportByTokenHash(ctx context.Context, workspaceID, tokenHash st
 }
 
 func (s *Store) RecordExportDownload(ctx context.Context, workspaceID, artifactID, downloadedAt string) (bool, error) {
-	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_export_artifacts", strings.TrimSpace(workspaceID)).Set("download_count", 1).Set("last_downloaded_at", strings.TrimSpace(downloadedAt)).Set("status", "downloaded").Where(query.And(query.Equal("id", strings.TrimSpace(artifactID)), query.Equal("download_count", 0))).Build()
+	return s.recordExportDownloadWithinDataScope(ctx, workspaceID, artifactID, "", downloadedAt, auditrepository.AllDataScope())
+}
+
+func (s *Store) RecordExportDownloadWithinDataScope(ctx context.Context, workspaceID, artifactID, requesterUserID, downloadedAt string, scope auditrepository.DataScope) (bool, error) {
+	return s.recordExportDownloadWithinDataScope(ctx, workspaceID, artifactID, requesterUserID, downloadedAt, scope)
+}
+
+func (s *Store) recordExportDownloadWithinDataScope(ctx context.Context, workspaceID, artifactID, requesterUserID, downloadedAt string, scope auditrepository.DataScope) (first bool, err error) {
+	workspaceID, artifactID = strings.TrimSpace(workspaceID), strings.TrimSpace(artifactID)
+	if workspaceID == "" || artifactID == "" {
+		return false, fmt.Errorf("audit export artifact identity is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	result, err := s.db.ExecContext(ctx, statement, args...)
-	if err != nil {
-		return false, err
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	predicates := []query.Predicate{query.Equal("id", artifactID)}
+	if requesterUserID = strings.TrimSpace(requesterUserID); requesterUserID != "" {
+		predicates = append(predicates, query.Equal("requester_user_id", requesterUserID))
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 1 {
-		return true, nil
+	if scopePredicate := exportArtifactDataScopePredicate(scope); scopePredicate != nil {
+		predicates = append(predicates, scopePredicate)
 	}
-	lookup, lookupArgs, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_export_artifacts", workspaceID).Projections(query.Project(query.CountAll())).Where(query.Equal("id", strings.TrimSpace(artifactID))).Build()
+	lookup, lookupArgs, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_export_artifacts", workspaceID).
+		Columns("download_count").Where(query.And(predicates...)).Limit(1).Build()
 	if err != nil {
 		return false, err
 	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&count); err != nil {
+	if err = tx.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&count); err != nil {
+		if err == sql.ErrNoRows {
+			return false, fmt.Errorf("audit export artifact not found")
+		}
 		return false, err
 	}
-	if count != 1 {
-		return false, fmt.Errorf("audit export artifact not found")
+	if count != 0 {
+		if err = tx.Commit(); err != nil {
+			return false, err
+		}
+		return false, nil
 	}
-	return false, nil
+	updatePredicates := append([]query.Predicate(nil), predicates...)
+	updatePredicates = append(updatePredicates, query.Equal("download_count", 0))
+	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_export_artifacts", workspaceID).
+		Set("download_count", 1).Set("last_downloaded_at", strings.TrimSpace(downloadedAt)).Set("status", "downloaded").
+		Where(query.And(updatePredicates...)).Build()
+	if err != nil {
+		return false, err
+	}
+	result, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return false, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if changed != 1 {
+		return false, fmt.Errorf("audit export artifact changed during scoped update")
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) exportByIdempotency(ctx context.Context, artifact contract.ExportArtifact) (contract.ExportArtifact, bool, error) {
@@ -99,6 +160,24 @@ func (s *Store) exportByIdempotency(ctx context.Context, artifact contract.Expor
 }
 func (s *Store) exportSelect(workspaceID string) *query.SelectBuilder {
 	return query.NewWorkspaceSelectBuilder(s.renderer, "_audit_export_artifacts", strings.TrimSpace(workspaceID)).Columns(exportColumns()...)
+}
+
+// Export artifacts intentionally have no organization field: they are owned
+// by their requester. Organization-only scopes therefore compile to false
+// instead of inferring ownership from unrelated mutable directory data.
+func exportArtifactDataScopePredicate(scope auditrepository.DataScope) query.Predicate {
+	scope = scope.Normalized()
+	if scope.All {
+		return nil
+	}
+	values := make([]any, len(scope.SubjectIDs))
+	for index := range scope.SubjectIDs {
+		values[index] = scope.SubjectIDs[index]
+	}
+	if len(values) == 0 {
+		return query.AlwaysFalse()
+	}
+	return query.In("requester_user_id", values...)
 }
 func exportColumns() []string {
 	return []string{"id", "workspace_id", "requester_user_id", "role_key", "idempotency_key", "filters_json", "scope_sha256", "authorization_scope_sha256", "token_sha256", "filename", "content_sha256", "row_count", "content_base64", "audit_identity", "status", "created_at", "expires_at", "download_count", "last_downloaded_at"}

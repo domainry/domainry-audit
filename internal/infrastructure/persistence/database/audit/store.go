@@ -9,6 +9,7 @@ import (
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	"github.com/domainry/domainry-orm/query"
 )
 
@@ -94,20 +95,22 @@ func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.E
 	if err != nil {
 		return fmt.Errorf("encode audit after: %w", err)
 	}
-	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
+	actorOrgID := eventActorOrgID(event)
+	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "event", "object_key", "record_id", "actor_id", "actor_org_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, actorOrgID, event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
 	if err != nil {
 		return err
 	}
 	if _, err = exec.ExecContext(ctx, queryValue, args...); err != nil {
 		lookup, lookupArgs, buildErr := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).
-			Columns("event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
+			Columns("event", "object_key", "record_id", "actor_id", "actor_org_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
 			Where(query.Equal("id", event.ID)).Limit(1).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build audit event replay lookup: %w", buildErr)
 		}
 		var storedEvent, objectKey, recordID, actorID, roleKey, summary, storedMetadata, storedBefore, storedAfter string
-		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&storedEvent, &objectKey, &recordID, &actorID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter)
-		if lookupErr == nil && storedEvent == event.Event && objectKey == event.ObjectKey && recordID == event.RecordID && actorID == event.ActorID && roleKey == event.RoleKey && summary == event.Summary && storedMetadata == string(metadata) && storedBefore == string(before) && storedAfter == string(after) {
+		var storedActorOrgID sql.NullString
+		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&storedEvent, &objectKey, &recordID, &actorID, &storedActorOrgID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter)
+		if lookupErr == nil && storedEvent == event.Event && objectKey == event.ObjectKey && recordID == event.RecordID && actorID == event.ActorID && storedActorOrgID.String == actorOrgID && roleKey == event.RoleKey && summary == event.Summary && storedMetadata == string(metadata) && storedBefore == string(before) && storedAfter == string(after) {
 			return nil
 		}
 		return fmt.Errorf("insert audit event: %w", err)
@@ -119,14 +122,21 @@ func (s *Store) List(ctx context.Context, workspaceID string, queryValue contrac
 	if strings.TrimSpace(workspaceID) == "" {
 		return nil, fmt.Errorf("audit query workspace is required")
 	}
-	return s.list(ctx, strings.TrimSpace(workspaceID), true, queryValue)
+	return s.list(ctx, strings.TrimSpace(workspaceID), true, queryValue, auditrepository.AllDataScope())
+}
+
+func (s *Store) ListWithinDataScope(ctx context.Context, workspaceID string, queryValue contract.Query, scope auditrepository.DataScope) ([]contract.Event, error) {
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil, fmt.Errorf("audit query workspace is required")
+	}
+	return s.list(ctx, strings.TrimSpace(workspaceID), true, queryValue, scope.Normalized())
 }
 
 func (s *Store) ListSystem(ctx context.Context, queryValue contract.Query) ([]contract.Event, error) {
-	return s.list(ctx, "", false, queryValue)
+	return s.list(ctx, "", false, queryValue, auditrepository.AllDataScope())
 }
 
-func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, queryValue contract.Query) ([]contract.Event, error) {
+func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, queryValue contract.Query, scope auditrepository.DataScope) ([]contract.Event, error) {
 	limit := queryValue.Limit
 	if limit <= 0 {
 		limit = 100
@@ -175,6 +185,9 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 		}
 		predicates = append(predicates, query.Or(query.LessThan("created_at", cursor.CreatedAt), query.And(query.Equal("created_at", cursor.CreatedAt), query.LessThan("id", cursor.ID))))
 	}
+	if scopePredicate := auditEventDataScopePredicate(scope); scopePredicate != nil {
+		predicates = append(predicates, scopePredicate)
+	}
 	var b *query.SelectBuilder
 	if scoped {
 		b = query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID)
@@ -208,6 +221,40 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 		result = append(result, e)
 	}
 	return result, rows.Err()
+}
+
+func eventActorOrgID(event contract.Event) string {
+	value, _ := event.Metadata["actor_org_id"].(string)
+	return strings.TrimSpace(value)
+}
+
+func auditEventDataScopePredicate(scope auditrepository.DataScope) query.Predicate {
+	scope = scope.Normalized()
+	if scope.All {
+		return nil
+	}
+	branches := make([]query.Predicate, 0, 2)
+	if values := scopeValues(scope.SubjectIDs); len(values) > 0 {
+		branches = append(branches, query.In("actor_id", values...))
+	}
+	if values := scopeValues(scope.OrganizationIDs); len(values) > 0 {
+		branches = append(branches, query.In("actor_org_id", values...))
+	}
+	if len(branches) == 0 {
+		return query.AlwaysFalse()
+	}
+	if len(branches) == 1 {
+		return branches[0]
+	}
+	return query.Or(branches...)
+}
+
+func scopeValues(values []string) []any {
+	result := make([]any, len(values))
+	for index := range values {
+		result[index] = values[index]
+	}
+	return result
 }
 
 func (s *Store) Options(ctx context.Context, workspaceID string, queryValue contract.OptionQuery) ([]contract.Option, error) {
