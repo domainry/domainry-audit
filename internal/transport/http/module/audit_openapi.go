@@ -107,7 +107,7 @@ func auditOpenAPIPageSchema(event map[string]any) map[string]any {
 
 func auditOpenAPIExportRequestSchema() map[string]any {
 	filter := auditOpenAPIExportFilterSchema()
-	request := auditOpenAPIRequiredObject([]string{"filters"}, map[string]any{"filters": filter, "format": map[string]any{"type": "string", "enum": []string{"csv"}}})
+	request := auditOpenAPIRequiredObject([]string{"filters"}, map[string]any{"filters": filter})
 	request["additionalProperties"] = false
 	return request
 }
