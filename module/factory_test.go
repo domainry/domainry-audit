@@ -65,16 +65,16 @@ func (t testTransaction) QueryRowContext(ctx context.Context, q string, args ...
 
 type testAuditApplicationHost struct{ key []byte }
 
-func (h testAuditApplicationHost) ResolveAuditSurfacePrincipal(_ context.Context, request modulehost.AuditSurfacePrincipalRequest) (modulehost.AuditSurfacePrincipal, error) {
-	return modulehost.AuditSurfacePrincipal{
+func (h testAuditApplicationHost) ResolveAuditPrincipal(_ context.Context, request modulehost.AuditPrincipalRequest) (modulehost.AuditPrincipal, error) {
+	return modulehost.AuditPrincipal{
 		Identity: request.Identity, BusinessProfileKey: request.BusinessProfileKey, BusinessProfileID: request.BusinessProfileID,
 		RequestID: request.RequestID, CorrelationID: request.CorrelationID, AuthorizationRevision: request.Identity.AuthorizationRevision,
 	}, nil
 }
-func (testAuditApplicationHost) AuthorizeAuditRecord(context.Context, modulehost.AuditSurfacePrincipal, string, string) error {
+func (testAuditApplicationHost) AuthorizeAuditRecord(context.Context, modulehost.AuditPrincipal, string, string) error {
 	return nil
 }
-func (testAuditApplicationHost) ProjectAuditEvents(_ context.Context, _ modulehost.AuditSurfacePrincipal, events []contract.Event) ([]contract.Event, error) {
+func (testAuditApplicationHost) ProjectAuditEvents(_ context.Context, _ modulehost.AuditPrincipal, events []contract.Event) ([]contract.Event, error) {
 	return append([]contract.Event(nil), events...), nil
 }
 func (h testAuditApplicationHost) AuditExportTokenKey() []byte { return append([]byte(nil), h.key...) }
@@ -104,7 +104,7 @@ func TestModuleUsesBorrowedHostDatabase(t *testing.T) {
 	}
 }
 
-func TestAuthorizationActionsExposeGovernancePageFromSourceSurface(t *testing.T) {
+func TestAuthorizationActionsExposeGovernancePageFromSourceAdapter(t *testing.T) {
 	actions := AuthorizationActions()
 	found := false
 	for _, action := range actions {
@@ -197,7 +197,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	}
 }
 
-func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
+func TestModuleOwnsAuditProductHTTPAdapterAndOpenAPI(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if descriptor := binding.Descriptor(); descriptor.Validate() != nil || !descriptor.Capabilities.HTTPSurface {
+	if descriptor := binding.Descriptor(); descriptor.Validate() != nil || !descriptor.Capabilities.HTTPAdapter {
 		t.Fatalf("Audit HTTP descriptor=%#v", descriptor)
 	}
 	binder, ok := binding.(auditsdk.ApplicationHostBinder)
@@ -220,35 +220,35 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 	}
 	provider, ok := binding.(modulehttp.Provider)
 	if !ok {
-		t.Fatal("Audit Binding must provide HTTP surfaces")
+		t.Fatal("Audit Binding must provide HTTP adapters")
 	}
-	if len(provider.HTTPSurfaces()) != 1 {
-		t.Fatalf("Audit HTTP surfaces=%v", provider.HTTPSurfaces())
+	if len(provider.HTTPAdapters()) != 1 {
+		t.Fatalf("Audit HTTP adapters=%v", provider.HTTPAdapters())
 	}
-	surface := provider.HTTPSurfaces()[0]
-	if err := modulehttp.ValidateSurface(surface); err != nil {
+	adapter := provider.HTTPAdapters()[0]
+	if err := modulehttp.ValidateAdapter(adapter); err != nil {
 		t.Fatal(err)
 	}
-	if len(surface.Routes()) != 7 || len(surface.(modulehttp.OpenAPIProvider).OpenAPIOperations()) != 7 {
-		t.Fatalf("routes=%d OpenAPI=%d", len(surface.Routes()), len(surface.(modulehttp.OpenAPIProvider).OpenAPIOperations()))
+	if len(adapter.Routes()) != 7 || len(adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()) != 7 {
+		t.Fatalf("routes=%d OpenAPI=%d", len(adapter.Routes()), len(adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()))
 	}
 	expectedRoutes := map[string]struct {
 		permission string
 		auditClass string
 	}{
-		"GET /business/audit-events":                          {"audit.business.read", "business_audit_read"},
-		"POST /business/audit-event-exports":                  {"audit.business.export.prepare", "business_audit_export_prepare_audit"},
-		"GET /business/audit-event-exports/downloads/{token}": {"audit.business.export.download", "business_audit_export_download_audit"},
-		"GET /tenant-admin/audit-events":                      {"audit.governance.read", "tenant_governance_audit_read"},
-		"GET /tenant-admin/audit-events/export":               {"audit.governance.export", "tenant_governance_audit_export"},
-		"GET /operations/audit-events":                        {"audit.ops.read", "operations_audit_read"},
-		"GET /operations/audit-events/export":                 {"audit.ops.export", "operations_audit_export"},
+		"GET /audit/events":                    {"audit.business.read", "business_audit_read"},
+		"POST /audit/exports":                  {"audit.business.export.prepare", "business_audit_export_prepare_audit"},
+		"GET /audit/exports/downloads/{token}": {"audit.business.export.download", "business_audit_export_download_audit"},
+		"GET /audit/governance/events":         {"audit.governance.read", "tenant_governance_audit_read"},
+		"GET /audit/governance/events/export":  {"audit.governance.export", "tenant_governance_audit_export"},
+		"GET /audit/system/events":             {"audit.ops.read", "operations_audit_read"},
+		"GET /audit/system/events/export":      {"audit.ops.export", "operations_audit_export"},
 	}
-	operations := surface.(modulehttp.OpenAPIProvider).OpenAPIOperations()
-	if method := operations["GET /business/audit-events"]["x-domainry-runtime-client-method"]; method != "listBusinessAuditEventPage" {
+	operations := adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()
+	if method := operations["GET /audit/events"]["x-domainry-runtime-client-method"]; method != "listBusinessAuditEventPage" {
 		t.Fatalf("business Audit Runtime client method=%v", method)
 	}
-	for _, route := range surface.Routes() {
+	for _, route := range adapter.Routes() {
 		pattern := route.Pattern()
 		expected, ok := expectedRoutes[pattern]
 		if !ok || route.Action.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || route.Action.Permission == nil || route.Action.Permission.Key != expected.permission || route.Action.AuditClass != expected.auditClass {
@@ -263,9 +263,9 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 		t.Fatalf("missing Audit routes: %#v", expectedRoutes)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/business/audit-events", nil)
+	request := httptest.NewRequest(http.MethodGet, "/audit/events", nil)
 	response := httptest.NewRecorder()
-	surface.Handler().ServeHTTP(response, request)
+	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || !bytes.Contains(response.Body.Bytes(), []byte("backend.auth.token_required")) {
 		t.Fatalf("unauthenticated status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -278,10 +278,10 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal := auditHTTPTestPrincipal()
-	request = httptest.NewRequest(http.MethodGet, "/business/audit-events?event=order.completed&page_size=20", nil)
+	request = httptest.NewRequest(http.MethodGet, "/audit/events?event=order.completed&page_size=20", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
 	response = httptest.NewRecorder()
-	surface.Handler().ServeHTTP(response, request)
+	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -293,17 +293,17 @@ func TestModuleOwnsAuditProductHTTPSurfaceAndOpenAPI(t *testing.T) {
 		t.Fatalf("page=%#v err=%v", page, err)
 	}
 
-	request = httptest.NewRequest(http.MethodPost, "/business/audit-event-exports", bytes.NewBufferString(`{"filters":{},"unknown":true}`))
+	request = httptest.NewRequest(http.MethodPost, "/audit/exports", bytes.NewBufferString(`{"filters":{},"unknown":true}`))
 	request.Header.Set("Idempotency-Key", "invalid-body")
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
 	response = httptest.NewRecorder()
-	surface.Handler().ServeHTTP(response, request)
+	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("backend.audit.export_request_invalid")) {
 		t.Fatalf("invalid export status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
-func TestAuditHTTPSurfaceKeepsExactPermissionDataScopesIndependent(t *testing.T) {
+func TestAuditHTTPAdapterKeepsExactPermissionDataScopesIndependent(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -328,16 +328,16 @@ func TestAuditHTTPSurfaceKeepsExactPermissionDataScopesIndependent(t *testing.T)
 	if err := binder.BindApplicationHost(testAuditApplicationHost{key: []byte("0123456789abcdef0123456789abcdef")}); err != nil {
 		t.Fatal(err)
 	}
-	surface := binding.(modulehttp.Provider).HTTPSurfaces()[0]
+	adapter := binding.(modulehttp.Provider).HTTPAdapters()[0]
 	principal := auditHTTPTestPrincipalWithScopes("user", map[string][]identitysdk.DataScope{
 		"audit.business.read":   {identitysdk.DataScopeOwner},
 		"audit.governance.read": {identitysdk.DataScopeAll},
 	})
 
-	request := httptest.NewRequest(http.MethodGet, "/business/audit-events?actor_id=other", nil)
+	request := httptest.NewRequest(http.MethodGet, "/audit/events?actor_id=other", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
 	response := httptest.NewRecorder()
-	surface.Handler().ServeHTTP(response, request)
+	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("business status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -348,10 +348,10 @@ func TestAuditHTTPSurfaceKeepsExactPermissionDataScopesIndependent(t *testing.T)
 		t.Fatalf("owner business page=%#v err=%v", businessPage, err)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/tenant-admin/audit-events", nil)
+	request = httptest.NewRequest(http.MethodGet, "/audit/governance/events", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
 	response = httptest.NewRecorder()
-	surface.Handler().ServeHTTP(response, request)
+	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("governance status=%d body=%s", response.Code, response.Body.String())
 	}

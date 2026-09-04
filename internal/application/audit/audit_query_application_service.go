@@ -22,43 +22,43 @@ const (
 	AuditPermissionOperationsExport       = "audit.ops.export"
 )
 
-// AuditSurfaceApplicationService owns the product-facing Audit query and
+// AuditQueryApplicationService owns the product-facing Audit query and
 // export use cases. Runtime contributes only the cross-owner record access and
 // field-projection capabilities declared by modulehost.AuditApplicationHost.
-type AuditSurfaceApplicationService struct {
+type AuditQueryApplicationService struct {
 	audit   *Service
 	exports *ExportService
 	host    modulehost.AuditApplicationHost
 	clock   Clock
 }
 
-type AuditSurfaceResult = auditdomain.SurfaceResult
+type AuditQueryResult = auditdomain.QueryResult
 
-func NewAuditSurfaceApplicationService(audit *Service, exports *ExportService, host modulehost.AuditApplicationHost, clock Clock) (*AuditSurfaceApplicationService, error) {
+func NewAuditQueryApplicationService(audit *Service, exports *ExportService, host modulehost.AuditApplicationHost, clock Clock) (*AuditQueryApplicationService, error) {
 	if audit == nil || exports == nil || host == nil || len(host.AuditExportTokenKey()) < 16 {
-		return nil, errors.New("Audit surface application host is incomplete")
+		return nil, errors.New("Audit query application host is incomplete")
 	}
 	if clock == nil {
 		clock = systemClock{}
 	}
-	service := &AuditSurfaceApplicationService{audit: audit, exports: exports, host: host, clock: clock}
+	service := &AuditQueryApplicationService{audit: audit, exports: exports, host: host, clock: clock}
 	exports.ConfigureExport(host.AuditExportTokenKey(), service.authorizeExportRecord)
 	return service, nil
 }
 
-func (s *AuditSurfaceApplicationService) ResolvePrincipal(ctx context.Context, request modulehost.AuditSurfacePrincipalRequest) (modulehost.AuditSurfacePrincipal, error) {
+func (s *AuditQueryApplicationService) ResolvePrincipal(ctx context.Context, request modulehost.AuditPrincipalRequest) (modulehost.AuditPrincipal, error) {
 	if err := ctx.Err(); err != nil {
-		return modulehost.AuditSurfacePrincipal{}, err
+		return modulehost.AuditPrincipal{}, err
 	}
 	if !request.Identity.Known || strings.TrimSpace(request.Identity.WorkspaceID) == "" || strings.TrimSpace(request.Identity.UserID) == "" {
-		return modulehost.AuditSurfacePrincipal{}, auditSurfaceError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
+		return modulehost.AuditPrincipal{}, auditQueryError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
 	}
-	principal, err := s.host.ResolveAuditSurfacePrincipal(ctx, request)
+	principal, err := s.host.ResolveAuditPrincipal(ctx, request)
 	if err != nil {
-		return modulehost.AuditSurfacePrincipal{}, err
+		return modulehost.AuditPrincipal{}, err
 	}
 	if !principal.Identity.Known || strings.TrimSpace(principal.Identity.WorkspaceID) == "" || strings.TrimSpace(principal.Identity.UserID) == "" {
-		return modulehost.AuditSurfacePrincipal{}, auditSurfaceError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
+		return modulehost.AuditPrincipal{}, auditQueryError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
 	}
 	if strings.TrimSpace(principal.AuthorizationRevision) == "" {
 		principal.AuthorizationRevision = principal.Identity.AuthorizationRevision
@@ -66,52 +66,52 @@ func (s *AuditSurfaceApplicationService) ResolvePrincipal(ctx context.Context, r
 	return principal, nil
 }
 
-func (s *AuditSurfaceApplicationService) BusinessEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
+func (s *AuditQueryApplicationService) BusinessEvents(ctx context.Context, query contract.Query, principal modulehost.AuditPrincipal) (AuditQueryResult, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionBusinessRead, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
 	if query.ObjectKey != "" && query.RecordID != "" {
 		if err := s.host.AuthorizeAuditRecord(ctx, principal, query.ObjectKey, query.RecordID); err != nil {
-			return AuditSurfaceResult{}, err
+			return AuditQueryResult{}, err
 		}
 	}
-	return s.surface(ctx, auditdomain.SurfaceBusiness, query, principal, scope)
+	return s.query(ctx, auditdomain.EventClassBusiness, query, principal, scope)
 }
 
-func (s *AuditSurfaceApplicationService) GovernanceEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
+func (s *AuditQueryApplicationService) GovernanceEvents(ctx context.Context, query contract.Query, principal modulehost.AuditPrincipal) (AuditQueryResult, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionGovernanceRead, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
-	return s.surface(ctx, auditdomain.SurfaceGovernance, query, principal, scope)
+	return s.query(ctx, auditdomain.EventClassGovernance, query, principal, scope)
 }
 
-func (s *AuditSurfaceApplicationService) ExportGovernanceEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
+func (s *AuditQueryApplicationService) ExportGovernanceEvents(ctx context.Context, query contract.Query, principal modulehost.AuditPrincipal) (AuditQueryResult, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionGovernanceExport, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
-	return s.surface(ctx, auditdomain.SurfaceGovernance, query, principal, scope)
+	return s.query(ctx, auditdomain.EventClassGovernance, query, principal, scope)
 }
 
-func (s *AuditSurfaceApplicationService) OperationsEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
+func (s *AuditQueryApplicationService) OperationsEvents(ctx context.Context, query contract.Query, principal modulehost.AuditPrincipal) (AuditQueryResult, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionOperationsRead, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
-	return s.surface(ctx, auditdomain.SurfaceOperations, query, principal, scope)
+	return s.query(ctx, auditdomain.EventClassOperations, query, principal, scope)
 }
 
-func (s *AuditSurfaceApplicationService) ExportOperationsEvents(ctx context.Context, query contract.Query, principal modulehost.AuditSurfacePrincipal) (AuditSurfaceResult, error) {
+func (s *AuditQueryApplicationService) ExportOperationsEvents(ctx context.Context, query contract.Query, principal modulehost.AuditPrincipal) (AuditQueryResult, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionOperationsExport, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
-	return s.surface(ctx, auditdomain.SurfaceOperations, query, principal, scope)
+	return s.query(ctx, auditdomain.EventClassOperations, query, principal, scope)
 }
 
-func (s *AuditSurfaceApplicationService) PrepareBusinessExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal modulehost.AuditSurfacePrincipal) (contract.ExportPrepared, error) {
+func (s *AuditQueryApplicationService) PrepareBusinessExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal modulehost.AuditPrincipal) (contract.ExportPrepared, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionBusinessExportPrepare, s.clock.Now())
 	if err != nil {
 		return contract.ExportPrepared{}, err
@@ -124,7 +124,7 @@ func (s *AuditSurfaceApplicationService) PrepareBusinessExport(ctx context.Conte
 	return prepared, nil
 }
 
-func (s *AuditSurfaceApplicationService) DownloadBusinessExport(ctx context.Context, token string, principal modulehost.AuditSurfacePrincipal) ([]byte, string, error) {
+func (s *AuditQueryApplicationService) DownloadBusinessExport(ctx context.Context, token string, principal modulehost.AuditPrincipal) ([]byte, string, error) {
 	scope, err := resolveAuditDataScope(principal.Identity, AuditPermissionBusinessExportDownload, s.clock.Now())
 	if err != nil {
 		return nil, "", err
@@ -132,26 +132,26 @@ func (s *AuditSurfaceApplicationService) DownloadBusinessExport(ctx context.Cont
 	return s.exports.DownloadExportWithinDataScope(ctx, strings.TrimSpace(token), auditExportPrincipal(principal), scope, s.authorizeExportRecord)
 }
 
-func (s *AuditSurfaceApplicationService) surface(ctx context.Context, kind auditdomain.SurfaceKind, query contract.Query, principal modulehost.AuditSurfacePrincipal, scope auditrepository.DataScope) (AuditSurfaceResult, error) {
-	plan, err := auditdomain.PlanSurface(kind, query, principal.Identity.UserID, s.clock.Now())
+func (s *AuditQueryApplicationService) query(ctx context.Context, kind auditdomain.EventClass, query contract.Query, principal modulehost.AuditPrincipal, scope auditrepository.DataScope) (AuditQueryResult, error) {
+	plan, err := auditdomain.PlanQuery(kind, query, principal.Identity.UserID, s.clock.Now())
 	if err != nil {
-		return AuditSurfaceResult{}, auditSurfaceError(apperror.KindBadRequest, "backend.audit.cursor_invalid", err)
+		return AuditQueryResult{}, auditQueryError(apperror.KindBadRequest, "backend.audit.cursor_invalid", err)
 	}
 	events, err := s.audit.ListWithinDataScope(ctx, principal.Identity.WorkspaceID, plan.Query, scope)
 	if err != nil {
-		return AuditSurfaceResult{}, auditSurfaceError(apperror.KindInternal, "backend.internal", err)
+		return AuditQueryResult{}, auditQueryError(apperror.KindInternal, "backend.internal", err)
 	}
 	events, err = s.host.ProjectAuditEvents(ctx, principal, events)
 	if err != nil {
-		return AuditSurfaceResult{}, err
+		return AuditQueryResult{}, err
 	}
-	return auditdomain.ProjectSurface(events, plan), nil
+	return auditdomain.ProjectQuery(events, plan), nil
 }
 
-func (s *AuditSurfaceApplicationService) authorizeExportRecord(ctx context.Context, filter contract.ExportFilter, exportPrincipal contract.ExportPrincipal) error {
+func (s *AuditQueryApplicationService) authorizeExportRecord(ctx context.Context, filter contract.ExportFilter, exportPrincipal contract.ExportPrincipal) error {
 	context, ok := exportPrincipal.AuthorizationContext.(auditExportAuthorizationContext)
 	if !ok {
-		return auditSurfaceError(apperror.KindForbidden, "backend.audit.export_scope_changed", nil)
+		return auditQueryError(apperror.KindForbidden, "backend.audit.export_scope_changed", nil)
 	}
 	if filter.ObjectKey == "" || filter.RecordID == "" {
 		return nil
@@ -160,10 +160,10 @@ func (s *AuditSurfaceApplicationService) authorizeExportRecord(ctx context.Conte
 }
 
 type auditExportAuthorizationContext struct {
-	Principal modulehost.AuditSurfacePrincipal
+	Principal modulehost.AuditPrincipal
 }
 
-func auditExportPrincipal(principal modulehost.AuditSurfacePrincipal) contract.ExportPrincipal {
+func auditExportPrincipal(principal modulehost.AuditPrincipal) contract.ExportPrincipal {
 	return contract.ExportPrincipal{
 		WorkspaceID: principal.Identity.WorkspaceID, UserID: principal.Identity.UserID,
 		RoleKey: principal.Identity.RoleKey, AuthorizationRevision: principal.AuthorizationRevision,
@@ -171,6 +171,6 @@ func auditExportPrincipal(principal modulehost.AuditSurfacePrincipal) contract.E
 	}
 }
 
-func auditSurfaceError(kind apperror.ErrorKind, code string, err error) error {
+func auditQueryError(kind apperror.ErrorKind, code string, err error) error {
 	return apperror.New(kind, code, err, nil)
 }

@@ -9,9 +9,9 @@ import (
 )
 
 func NewCapabilityBinding() (*modulecapability.StaticBinding, error) {
-	surface := &AuditSurface{}
-	allRoutes := surface.Routes()
-	operations := surface.OpenAPIOperations()
+	adapter := &AuditHTTPAdapter{}
+	allRoutes := adapter.Routes()
+	operations := adapter.OpenAPIOperations()
 	groups := map[string][]modulehttp.Route{}
 	for _, route := range allRoutes {
 		groups[auditCapabilityCategory(route.Pattern())] = append(groups[auditCapabilityCategory(route.Pattern())], route)
@@ -51,10 +51,10 @@ func NewCapabilityBinding() (*modulecapability.StaticBinding, error) {
 
 func auditCapabilityCategory(pattern string) string {
 	_, path, _ := strings.Cut(pattern, " ")
-	if strings.HasPrefix(path, "/business/") {
+	if path == "/audit/events" || strings.HasPrefix(path, "/audit/exports") {
 		return "audit.business"
 	}
-	if strings.HasPrefix(path, "/tenant-admin/") {
+	if strings.HasPrefix(path, "/audit/governance/") {
 		return "audit.governance"
 	}
 	return "audit.operations"

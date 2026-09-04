@@ -7,7 +7,7 @@ transaction.
 
 The module follows the standard Domainry boundaries:
 
-- `internal/domain/audit` owns event construction, export policy, repository ports, and product-surface scope/retention/pagination/redaction rules.
+- `internal/domain/audit` owns event construction, export policy, repository ports, and product-adapter scope/retention/pagination/redaction rules.
 - `internal/application/audit` orchestrates append, query, lifecycle, and export use cases.
 - `internal/adapter/auditsdk` adapts internal services to the public Audit SDK.
 - `internal/assembly/module` owns embedded-module composition.
@@ -17,7 +17,7 @@ The module follows the standard Domainry boundaries:
 - root `module` is the stable, logic-free public facade used by hosts.
 
 Audit SDK v1 currently defines embedded Module mode only. The Module Binding
-publishes its product HTTP Surface after the host supplies the narrow
+publishes its product HTTP Adapter after the host supplies the narrow
 cross-owner record access and field-projection capabilities. This repository
 does not add placeholder SaaS assembly or an `audit-server` command; those
 boundaries require a deployment-neutral remote protocol first.
@@ -39,6 +39,13 @@ organization-only artifact access fails closed instead of consulting mutable
 directory state.
 
 The SDK `Reader`, `ExportStore`, append, and subject-lifecycle ports are trusted
-module-integration capabilities rather than end-user authorization surfaces.
+module-integration capabilities rather than end-user authorization adapters.
 Product HTTP requests must use the scoped application services assembled after
 `BindApplicationHost`.
+
+## Continuous integration
+
+The GitHub Actions workflow runs with `GOWORK=off`, so it verifies the versions
+locked by this repository instead of silently borrowing sibling checkouts. The
+repository or organization must provide a read-only `DOMAINRY_READ_TOKEN`
+secret that can clone the private `github.com/domainry/*` Go modules.

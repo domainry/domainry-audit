@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+      GOPRIVATE: github.com/domainry/*
+      GONOSUMDB: github.com/domainry/*
+    steps:
+      - name: Check out Audit
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download locked private dependencies
+        env:
+          DOMAINRY_READ_TOKEN: ${{ secrets.DOMAINRY_READ_TOKEN }}
+        run: |
+          test -n "$DOMAINRY_READ_TOKEN"
+          git config --global url."https://x-access-token:${DOMAINRY_READ_TOKEN}@github.com/domainry/".insteadOf "https://github.com/domainry/"
+          trap 'git config --global --unset-all url.https://x-access-token:${DOMAINRY_READ_TOKEN}@github.com/domainry/.insteadOf' EXIT
+          go mod download
+
+      - name: Verify locked dependencies
+        run: go mod verify
+
+      - name: Run all tests
+        run: go test ./...
+
+      - name: Run database integration tests uncached
+        run: go test -count=1 -run '^TestIntegration' ./module
+
+      - name: Run race-sensitive boundaries
+        run: go test -race -count=1 ./module ./internal/application/audit ./internal/infrastructure/persistence/database/audit ./internal/infrastructure/persistence/database/export

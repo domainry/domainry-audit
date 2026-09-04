@@ -15,7 +15,7 @@ import (
 // role-authoring vocabulary; unsupported deny predicates fail closed.
 func resolveAuditDataScope(principal identitysdk.Principal, permission string, now time.Time) (auditrepository.DataScope, error) {
 	denied := func() (auditrepository.DataScope, error) {
-		return auditrepository.DataScope{}, auditSurfaceError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
+		return auditrepository.DataScope{}, auditQueryError(apperror.KindForbidden, "backend.audit.view_permission_required", nil)
 	}
 	permission = strings.TrimSpace(permission)
 	separator := strings.LastIndexByte(permission, '.')

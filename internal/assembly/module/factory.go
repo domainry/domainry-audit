@@ -67,16 +67,16 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	if err != nil {
 		return nil, err
 	}
-	binding.SetApplicationHostBinder(func(host modulehost.AuditApplicationHost) ([]modulehttp.Surface, error) {
-		application, err := auditapp.NewAuditSurfaceApplicationService(auditService, exportService, host, f.options.Clock)
+	binding.SetApplicationHostBinder(func(host modulehost.AuditApplicationHost) ([]modulehttp.Adapter, error) {
+		application, err := auditapp.NewAuditQueryApplicationService(auditService, exportService, host, f.options.Clock)
 		if err != nil {
 			return nil, err
 		}
-		surface, err := audithttp.NewAuditSurface(application)
+		adapter, err := audithttp.NewAuditHTTPAdapter(application)
 		if err != nil {
 			return nil, err
 		}
-		return []modulehttp.Surface{surface}, nil
+		return []modulehttp.Adapter{adapter}, nil
 	})
 	return binding, nil
 }

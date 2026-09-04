@@ -12,26 +12,26 @@ import (
 )
 
 type AuditHandler struct {
-	application *auditapp.AuditSurfaceApplicationService
+	application *auditapp.AuditQueryApplicationService
 }
 
-func NewAuditHandler(application *auditapp.AuditSurfaceApplicationService) (*AuditHandler, error) {
+func NewAuditHandler(application *auditapp.AuditQueryApplicationService) (*AuditHandler, error) {
 	if application == nil {
-		return nil, errors.New("Audit surface application is unavailable")
+		return nil, errors.New("Audit HTTP adapter application is unavailable")
 	}
 	return &AuditHandler{application: application}, nil
 }
 
-func (h *AuditHandler) auditPrincipal(r *http.Request) (modulehost.AuditSurfacePrincipal, error) {
+func (h *AuditHandler) auditPrincipal(r *http.Request) (modulehost.AuditPrincipal, error) {
 	identity, ok := identitysdk.PrincipalFromContext(r.Context())
 	if !ok {
-		return modulehost.AuditSurfacePrincipal{}, auditHTTPError(http.StatusUnauthorized, "backend.auth.token_required", nil)
+		return modulehost.AuditPrincipal{}, auditHTTPError(http.StatusUnauthorized, "backend.auth.token_required", nil)
 	}
 	requestID := requestcontext.RequestID(r.Context())
 	if requestID == "" {
 		requestID = strings.TrimSpace(r.Header.Get("X-Request-ID"))
 	}
-	return h.application.ResolvePrincipal(r.Context(), modulehost.AuditSurfacePrincipalRequest{
+	return h.application.ResolvePrincipal(r.Context(), modulehost.AuditPrincipalRequest{
 		Identity: identity, BusinessProfileKey: strings.TrimSpace(r.Header.Get("X-Business-Profile-Key")),
 		BusinessProfileID: strings.TrimSpace(r.Header.Get("X-Business-Profile-ID")), RequestID: requestID,
 		CorrelationID: requestcontext.CorrelationID(r.Context()),

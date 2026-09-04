@@ -27,7 +27,7 @@ func TestAuditCapabilityContractTracksOwnerRoutesWithoutInventedAuthoringValidat
 			t.Fatalf("Audit runtime request DTOs leaked into model validation scopes: %v", category.ValidationScopes)
 		}
 	}
-	if operations != len((&AuditSurface{}).Routes()) {
-		t.Fatalf("Audit disclosure operations=%d routes=%d", operations, len((&AuditSurface{}).Routes()))
+	if operations != len((&AuditHTTPAdapter{}).Routes()) {
+		t.Fatalf("Audit disclosure operations=%d routes=%d", operations, len((&AuditHTTPAdapter{}).Routes()))
 	}
 }

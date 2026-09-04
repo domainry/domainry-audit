@@ -59,7 +59,7 @@ type auditPageResponse[T any] struct {
 	RetentionDays  int    `json:"retention_days"`
 }
 
-func auditBusinessResponse(result auditapp.AuditSurfaceResult) auditPageResponse[auditBusinessEventResponse] {
+func auditBusinessResponse(result auditapp.AuditQueryResult) auditPageResponse[auditBusinessEventResponse] {
 	items := make([]auditBusinessEventResponse, 0, len(result.Items))
 	for _, event := range result.Items {
 		items = append(items, auditBusinessEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, Summary: event.Summary, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
@@ -67,7 +67,7 @@ func auditBusinessResponse(result auditapp.AuditSurfaceResult) auditPageResponse
 	return auditPage(result, items)
 }
 
-func auditGovernanceResponse(result auditapp.AuditSurfaceResult) auditPageResponse[auditGovernanceEventResponse] {
+func auditGovernanceResponse(result auditapp.AuditQueryResult) auditPageResponse[auditGovernanceEventResponse] {
 	items := make([]auditGovernanceEventResponse, 0, len(result.Items))
 	for _, event := range result.Items {
 		items = append(items, auditGovernanceEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, RoleKey: event.RoleKey, Summary: event.Summary, Metadata: event.Metadata, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
@@ -75,7 +75,7 @@ func auditGovernanceResponse(result auditapp.AuditSurfaceResult) auditPageRespon
 	return auditPage(result, items)
 }
 
-func auditOperationsResponse(result auditapp.AuditSurfaceResult) auditPageResponse[auditOperationsEventResponse] {
+func auditOperationsResponse(result auditapp.AuditQueryResult) auditPageResponse[auditOperationsEventResponse] {
 	items := make([]auditOperationsEventResponse, 0, len(result.Items))
 	for _, event := range result.Items {
 		items = append(items, auditOperationsEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, Summary: event.Summary, Metadata: event.Metadata, CreatedAt: event.CreatedAt})
@@ -83,7 +83,7 @@ func auditOperationsResponse(result auditapp.AuditSurfaceResult) auditPageRespon
 	return auditPage(result, items)
 }
 
-func auditPage[T any](result auditapp.AuditSurfaceResult, items []T) auditPageResponse[T] {
+func auditPage[T any](result auditapp.AuditQueryResult, items []T) auditPageResponse[T] {
 	return auditPageResponse[T]{Items: items, Count: len(items), PageSize: result.PageSize, Truncated: result.Truncated, NextCursor: result.NextCursor, RetentionClass: result.RetentionClass, RetentionDays: result.RetentionDays}
 }
 

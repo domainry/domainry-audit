@@ -22,8 +22,8 @@ type Binding struct {
 	exports     *auditapp.ExportService
 	exportStore *exportstore.Store
 	mu          sync.RWMutex
-	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)
-	surfaces    []modulehttp.Surface
+	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Adapter, error)
+	adapters    []modulehttp.Adapter
 	actions     []actioncontract.ActionDefinition
 	capability  modulecapability.Binding
 }
@@ -53,7 +53,7 @@ func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modul
 }
 
 func (b *Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: true, SubjectLifecycle: true, HTTPSurface: true}}
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: true, SubjectLifecycle: true, HTTPAdapter: true}}
 }
 func (b *Binding) Factory() contract.EventFactory                        { return b.audit }
 func (b *Binding) Appender() contract.Appender                           { return b.audit }
@@ -65,7 +65,7 @@ func (b *Binding) ExportStore() contract.ExportStore                     { retur
 func (b *Binding) Exporter() contract.Exporter                           { return b.exports }
 func (b *Binding) Close(context.Context) error                           { return nil }
 
-func (b *Binding) SetApplicationHostBinder(bind func(modulehost.AuditApplicationHost) ([]modulehttp.Surface, error)) {
+func (b *Binding) SetApplicationHostBinder(bind func(modulehost.AuditApplicationHost) ([]modulehttp.Adapter, error)) {
 	b.mu.Lock()
 	b.bindHost = bind
 	b.mu.Unlock()
@@ -78,20 +78,20 @@ func (b *Binding) BindApplicationHost(host modulehost.AuditApplicationHost) erro
 	if bind == nil {
 		return errors.New("Audit application host binder is unavailable")
 	}
-	surfaces, err := bind(host)
+	adapters, err := bind(host)
 	if err != nil {
 		return err
 	}
 	b.mu.Lock()
-	b.surfaces = append([]modulehttp.Surface(nil), surfaces...)
+	b.adapters = append([]modulehttp.Adapter(nil), adapters...)
 	b.mu.Unlock()
 	return nil
 }
 
-func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
+func (b *Binding) HTTPAdapters() []modulehttp.Adapter {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	return append([]modulehttp.Surface(nil), b.surfaces...)
+	return append([]modulehttp.Adapter(nil), b.adapters...)
 }
 
 func (b *Binding) AuthorizationActions() ([]actioncontract.ActionDefinition, error) {

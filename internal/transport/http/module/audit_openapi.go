@@ -2,10 +2,10 @@ package module
 
 import auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 
-func (surface *AuditSurface) OpenAPIOperations() map[string]map[string]any {
+func (adapter *AuditHTTPAdapter) OpenAPIOperations() map[string]map[string]any {
 	byAction := auditOpenAPIOperationsByAction()
 	result := make(map[string]map[string]any, len(byAction))
-	for _, route := range surface.Routes() {
+	for _, route := range adapter.Routes() {
 		if operation := byAction[route.Action.Key]; operation != nil {
 			result[route.Pattern()] = operation
 		}
@@ -15,7 +15,7 @@ func (surface *AuditSurface) OpenAPIOperations() map[string]map[string]any {
 
 // auditOpenAPIOperationsByAction owns only action-specific schemas and prose.
 // Method/path and authorization/governance facts are projected from the
-// canonical Action manifest by AuditSurface and modulecapability.
+// canonical Action manifest by AuditHTTPAdapter and modulecapability.
 func auditOpenAPIOperationsByAction() map[string]map[string]any {
 	security := []any{map[string]any{"BearerAuth": []any{}}}
 	queryParameters := auditOpenAPIQueryParameters()
