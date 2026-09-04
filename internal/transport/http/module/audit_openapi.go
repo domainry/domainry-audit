@@ -81,20 +81,18 @@ func auditOpenAPIQueryParameters() []any {
 
 func auditOpenAPIEventSchema(kind string) map[string]any {
 	properties := map[string]any{
-		"id": map[string]any{"type": "string"}, "event": map[string]any{"type": "string"}, "object_key": map[string]any{"type": "string"},
-		"record_id": map[string]any{"type": "string"}, "actor_id": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"},
+		"id": map[string]any{"type": "string"}, "workspace_id": map[string]any{"type": "string"}, "event": map[string]any{"type": "string"},
+		"object_key": map[string]any{"type": "string"}, "record_id": map[string]any{"type": "string"}, "actor_id": map[string]any{"type": "string"},
+		"role_key": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"},
+		"metadata": auditOpenAPIMap(), "before": auditOpenAPIMap(), "after": auditOpenAPIMap(),
 		"created_at": map[string]any{"type": "string", "format": "date-time"},
 	}
-	switch kind {
-	case "business":
-		properties["before"], properties["after"] = auditOpenAPIObject(nil), auditOpenAPIObject(nil)
-	case "governance":
-		properties["role_key"], properties["metadata"] = map[string]any{"type": "string"}, auditOpenAPIObject(nil)
-		properties["before"], properties["after"] = auditOpenAPIObject(nil), auditOpenAPIObject(nil)
-	case "operations":
-		properties["metadata"] = auditOpenAPIObject(nil)
-	}
-	return auditOpenAPIRequiredObject([]string{"id", "event", "actor_id", "summary", "created_at"}, properties)
+	_ = kind
+	return auditOpenAPIRequiredObject([]string{"id", "workspace_id", "event", "actor_id", "role_key", "summary", "created_at"}, properties)
+}
+
+func auditOpenAPIMap() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": true}
 }
 
 func auditOpenAPIPageSchema(event map[string]any) map[string]any {
