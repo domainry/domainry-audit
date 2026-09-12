@@ -49,7 +49,13 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 		{"_audit_export_artifacts", "idx_audit_export_expiry", false, []string{"workspace_id", "expires_at"}},
 	}
 	for _, index := range indexes {
-		builder := ormschema.NewIndex(renderer, index.name, index.table).Columns(index.columns...)
+		columns := index.columns
+		if adapter, ok := profile.(interface {
+			IndexColumns(string, []string) []string
+		}); ok && !index.unique {
+			columns = adapter.IndexColumns(index.table, columns)
+		}
+		builder := ormschema.NewIndex(renderer, index.name, index.table).Columns(columns...)
 		if index.unique {
 			builder.Unique()
 		}
