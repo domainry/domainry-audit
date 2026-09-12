@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -174,26 +176,73 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user", RoleKey: "member"}, Metadata: map[string]any{"result": "completed"}})
+	_, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user", RoleKey: "member", RequestID: "source-request"}, Metadata: map[string]any{"result": "completed", "reason": "order_fulfilled"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), nil)
-	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1"}
+	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1", RequestID: "prepare-request-1", CorrelationID: "correlation-1"}
 	prepared, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", principal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", principal)
+	replayPrincipal := principal
+	replayPrincipal.RequestID = "prepare-request-2"
+	replayed, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", replayPrincipal)
 	if err != nil || replayed.ID != prepared.ID {
 		t.Fatalf("replay=%+v err=%v", replayed, err)
 	}
-	content, filename, err := binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, principal)
+	conflictPrincipal := principal
+	conflictPrincipal.RequestID = "conflict-request-1"
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err = binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{Filters: contract.ExportFilter{Event: "order.completed"}}, "idem-1", conflictPrincipal); err == nil {
+			t.Fatal("idempotency fingerprint conflict accepted")
+		}
+	}
+	downloadPrincipal := principal
+	downloadPrincipal.RequestID = "download-request-1"
+	content, filename, err := binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, downloadPrincipal)
 	if err != nil || len(content) == 0 || filename == "" {
 		t.Fatalf("filename=%q content=%d err=%v", filename, len(content), err)
 	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf}))).ReadAll()
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("csv rows=%v err=%v", rows, err)
+	}
+	wantHeader := []string{"audit_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}
+	if !slices.Equal(rows[0], wantHeader) || rows[1][5] != "member" || rows[1][6] != "source-request" || rows[1][7] != "completed" || rows[1][8] != "order_fulfilled" {
+		t.Fatalf("csv=%v", rows)
+	}
 	if _, _, err = binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "other", RoleKey: "member", AuthorizationRevision: "r1"}); err == nil {
 		t.Fatal("requester mismatch accepted")
+	}
+	events, err := binding.Reader().List(t.Context(), "workspace", contract.Query{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRequests := map[string]string{"prepare-request-1": "audit_export_prepared", "prepare-request-2": "audit_export_prepared", "conflict-request-1": "audit_export_conflict", "download-request-1": "audit_export_downloaded"}
+	seen := map[string]int{}
+	for _, event := range events {
+		requestID, _ := event.Metadata["request_id"].(string)
+		if wantEvent := wantRequests[requestID]; wantEvent != "" {
+			if event.Event != wantEvent {
+				t.Fatalf("request %s event=%s want=%s", requestID, event.Event, wantEvent)
+			}
+			seen[requestID]++
+		}
+		if requestID == "conflict-request-1" {
+			if event.Metadata["result"] != "conflict" || event.Metadata["reason"] != "idempotency_fingerprint_conflict" || event.Metadata["error_code"] != "backend.idempotency.key_conflict" {
+				t.Fatalf("conflict metadata=%#v", event.Metadata)
+			}
+			if _, leaked := event.Metadata["idempotency_key"]; leaked {
+				t.Fatalf("conflict leaked idempotency key: %#v", event.Metadata)
+			}
+		}
+	}
+	for requestID := range wantRequests {
+		if seen[requestID] != 1 {
+			t.Fatalf("request %s audit count=%d", requestID, seen[requestID])
+		}
 	}
 }
 

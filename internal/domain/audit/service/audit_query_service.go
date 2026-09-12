@@ -31,8 +31,8 @@ type QueryPlan struct {
 }
 
 type QueryEvent struct {
-	ID, Event, ObjectKey, RecordID, ActorID, RoleKey, Summary, CreatedAt string
-	Metadata, Before, After                                              map[string]any
+	ID, Event, ObjectKey, RecordID, ActorID, RoleKey, RequestID, Result, Reason, Summary, CreatedAt string
+	Metadata, Before, After                                                                         map[string]any
 }
 
 type QueryResult struct {
@@ -92,18 +92,15 @@ func ProjectQuery(events []contract.Event, plan QueryPlan) QueryResult {
 		if contract.ClassifyAuditEvent(event) != string(plan.Kind) {
 			continue
 		}
+		metadata := secrets.RedactMap(event.Metadata)
+		projected := event
+		projected.Metadata = metadata
 		item := QueryEvent{
 			ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
-			ActorID: event.ActorID, RoleKey: event.RoleKey, Summary: event.Summary, CreatedAt: event.CreatedAt,
-		}
-		switch plan.Kind {
-		case EventClassBusiness:
-			item.Before, item.After = secrets.RedactMap(event.Before), secrets.RedactMap(event.After)
-		case EventClassGovernance:
-			item.Metadata = secrets.RedactMap(event.Metadata)
-			item.Before, item.After = secrets.RedactMap(event.Before), secrets.RedactMap(event.After)
-		case EventClassOperations:
-			item.Metadata = secrets.RedactMap(event.Metadata)
+			ActorID: event.ActorID, RoleKey: event.RoleKey, RequestID: AuditEventRequestID(projected),
+			Result: ExportEventResult(projected), Reason: ExportEventReason(projected),
+			Summary: event.Summary, CreatedAt: event.CreatedAt,
+			Metadata: metadata, Before: secrets.RedactMap(event.Before), After: secrets.RedactMap(event.After),
 		}
 		items = append(items, item)
 	}

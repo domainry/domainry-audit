@@ -3,7 +3,7 @@ module github.com/domainry/domainry-audit
 go 1.26.0
 
 require (
-	github.com/domainry/domainry-audit-sdk v0.1.3
+	github.com/domainry/domainry-audit-sdk v0.1.4
 	github.com/domainry/domainry-foundation v0.1.0
 	github.com/domainry/domainry-identity-sdk v0.1.5
 	github.com/domainry/domainry-orm v0.1.30

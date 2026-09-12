@@ -46,7 +46,7 @@ func NormalizeExportFilters(request contract.ExportRequest, _ contract.ExportPri
 }
 
 func ExportEventResult(event contract.Event) string {
-	for _, key := range []string{"result", "outcome", "status"} {
+	for _, key := range []string{"result", "outcome", "status", "decision"} {
 		if value, ok := event.Metadata[key]; ok {
 			result := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
 			if filterValue.MatchString(result) {
@@ -59,6 +59,25 @@ func ExportEventResult(event contract.Event) string {
 		if strings.Contains(lower, result) {
 			return result
 		}
+	}
+	return ""
+}
+
+func ExportEventReason(event contract.Event) string {
+	for _, key := range []string{"reason", "error_code", "message_key", "code"} {
+		if value, ok := event.Metadata[key]; ok {
+			reason := strings.TrimSpace(fmt.Sprint(value))
+			if reason != "" && reason != "<nil>" {
+				return reason
+			}
+		}
+	}
+	return ""
+}
+
+func AuditEventRequestID(event contract.Event) string {
+	if value, ok := event.Metadata["request_id"]; ok {
+		return strings.TrimSpace(fmt.Sprint(value))
 	}
 	return ""
 }

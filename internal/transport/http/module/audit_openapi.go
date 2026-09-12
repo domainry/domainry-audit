@@ -81,14 +81,14 @@ func auditOpenAPIQueryParameters() []any {
 
 func auditOpenAPIEventSchema(kind string) map[string]any {
 	properties := map[string]any{
-		"id": map[string]any{"type": "string"}, "workspace_id": map[string]any{"type": "string"}, "event": map[string]any{"type": "string"},
+		"id": map[string]any{"type": "string"}, "event": map[string]any{"type": "string"},
 		"object_key": map[string]any{"type": "string"}, "record_id": map[string]any{"type": "string"}, "actor_id": map[string]any{"type": "string"},
-		"role_key": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"},
+		"role_key": map[string]any{"type": "string"}, "request_id": map[string]any{"type": "string"}, "result": map[string]any{"type": "string"}, "reason": map[string]any{"type": "string"}, "summary": map[string]any{"type": "string"},
 		"metadata": auditOpenAPIMap(), "before": auditOpenAPIMap(), "after": auditOpenAPIMap(),
 		"created_at": map[string]any{"type": "string", "format": "date-time"},
 	}
 	_ = kind
-	return auditOpenAPIRequiredObject([]string{"id", "workspace_id", "event", "actor_id", "role_key", "summary", "created_at"}, properties)
+	return auditOpenAPIRequiredObject([]string{"id", "event", "actor_id", "role_key", "request_id", "result", "reason", "summary", "created_at"}, properties)
 }
 
 func auditOpenAPIMap() map[string]any {

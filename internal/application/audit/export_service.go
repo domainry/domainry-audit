@@ -93,7 +93,7 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 		if filters.Result != "" && !strings.EqualFold(filters.Result, result) {
 			continue
 		}
-		rows = append(rows, []string{event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, result, event.CreatedAt})
+		rows = append(rows, []string{event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, auditservice.AuditEventRequestID(event), result, auditservice.ExportEventReason(event), event.CreatedAt})
 	}
 	if len(rows) == 0 {
 		return contract.ExportPrepared{}, exportError("export_no_results", nil)
@@ -111,6 +111,9 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 	artifact := contract.ExportArtifact{ID: artifactID, WorkspaceID: strings.TrimSpace(principal.WorkspaceID), RequesterUserID: strings.TrimSpace(principal.UserID), RoleKey: principal.RoleKey, IdempotencyKey: idempotencyKey, Filters: filters, ScopeSHA256: scopeHash, AuthorizationScopeSHA256: authorizationHash, TokenSHA256: exportHash(token), Filename: "audit-events-" + now.Format("20060102T150405Z") + ".csv", ContentSHA256: exportBytesHash(content), RowCount: len(rows), Content: content, AuditIdentity: auditIdentity, Status: "prepared", CreatedAt: now.Format(time.RFC3339Nano), ExpiresAt: expiresAt}
 	stored, created, err := s.store.CreateOrGetExport(ctx, artifact)
 	if errors.Is(err, contract.ErrExportIdempotencyConflict) {
+		if auditErr := s.appendExportConflictAudit(ctx, principal, artifact.ID); auditErr != nil {
+			return contract.ExportPrepared{}, auditErr
+		}
 		return contract.ExportPrepared{}, exportError("idempotency_key_conflict", err)
 	}
 	if err != nil {
@@ -120,7 +123,7 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 	if exportHash(token) != stored.TokenSHA256 {
 		return contract.ExportPrepared{}, exportError("export_integrity_failed", nil)
 	}
-	if err := s.appendExportAudit(ctx, "audit_export_prepared", principal, stored, map[string]any{"idempotency_replayed": !created}); err != nil {
+	if err := s.appendExportAudit(ctx, "audit_export_prepared", principal, stored, map[string]any{"idempotency_replayed": !created, "result": "success"}); err != nil {
 		return contract.ExportPrepared{}, err
 	}
 	return preparedExport(stored, token), nil
@@ -172,7 +175,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 		return nil, "", exportError("export_persistence_failed", err)
 	}
 	if first {
-		if err := s.appendExportAudit(ctx, "audit_export_downloaded", principal, a, nil); err != nil {
+		if err := s.appendExportAudit(ctx, "audit_export_downloaded", principal, a, map[string]any{"result": "success"}); err != nil {
 			return nil, "", err
 		}
 	}
@@ -183,7 +186,7 @@ func encodeExportCSV(rows [][]string) ([]byte, error) {
 	var b bytes.Buffer
 	b.Write([]byte{0xef, 0xbb, 0xbf})
 	w := csv.NewWriter(&b)
-	if err := w.Write([]string{"audit_id", "event", "object_key", "record_id", "actor_id", "result", "created_at"}); err != nil {
+	if err := w.Write([]string{"audit_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}); err != nil {
 		return nil, err
 	}
 	if err := w.WriteAll(rows); err != nil {
@@ -224,11 +227,43 @@ func (s *ExportService) appendExportAudit(ctx context.Context, event string, p c
 	for k, v := range extra {
 		metadata[k] = v
 	}
-	_, err := s.appender.Append(ctx, contract.AppendRequest{Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: contract.Actor{WorkspaceID: p.WorkspaceID, SubjectID: p.UserID, RoleKey: p.RoleKey, AuthorizationRevision: p.AuthorizationRevision}, Summary: "Audit event export lifecycle", Metadata: metadata})
+	_, err := s.appender.Append(ctx, contract.AppendRequest{Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
 	if err != nil {
 		return exportError("export_audit_failed", err)
 	}
 	return nil
+}
+
+func (s *ExportService) appendExportConflictAudit(ctx context.Context, p contract.ExportPrincipal, artifactID string) error {
+	idempotencyKey := ""
+	if requestID := strings.TrimSpace(p.RequestID); requestID != "" {
+		idempotencyKey = "audit_export_conflict:" + requestID
+	}
+	_, err := s.appender.Append(ctx, contract.AppendRequest{
+		IdempotencyKey: idempotencyKey,
+		Event:          "audit_export_conflict",
+		ObjectKey:      "audit_events",
+		RecordID:       artifactID,
+		Actor:          exportAuditActor(p),
+		Summary:        "Audit event export idempotency conflict",
+		Metadata: map[string]any{
+			"artifact_id": artifactID,
+			"result":      "conflict",
+			"reason":      "idempotency_fingerprint_conflict",
+			"error_code":  "backend.idempotency.key_conflict",
+		},
+	})
+	if err != nil {
+		return exportError("export_audit_failed", err)
+	}
+	return nil
+}
+
+func exportAuditActor(p contract.ExportPrincipal) contract.Actor {
+	return contract.Actor{
+		WorkspaceID: p.WorkspaceID, SubjectID: p.UserID, RoleKey: p.RoleKey,
+		RequestID: p.RequestID, CorrelationID: p.CorrelationID, AuthorizationRevision: p.AuthorizationRevision,
+	}
 }
 
 func exportActorOrgID(principal contract.ExportPrincipal) string {

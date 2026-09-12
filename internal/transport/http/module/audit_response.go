@@ -12,40 +12,20 @@ import (
 	"github.com/domainry/domainry-foundation/apperror"
 )
 
-type auditBusinessEventResponse struct {
+type auditEventResponse struct {
 	ID        string         `json:"id"`
 	Event     string         `json:"event"`
 	ObjectKey string         `json:"object_key,omitempty"`
 	RecordID  string         `json:"record_id,omitempty"`
 	ActorID   string         `json:"actor_id"`
-	Summary   string         `json:"summary"`
-	Before    map[string]any `json:"before,omitempty"`
-	After     map[string]any `json:"after,omitempty"`
-	CreatedAt string         `json:"created_at"`
-}
-
-type auditGovernanceEventResponse struct {
-	ID        string         `json:"id"`
-	Event     string         `json:"event"`
-	ObjectKey string         `json:"object_key,omitempty"`
-	RecordID  string         `json:"record_id,omitempty"`
-	ActorID   string         `json:"actor_id"`
-	RoleKey   string         `json:"role_key,omitempty"`
+	RoleKey   string         `json:"role_key"`
+	RequestID string         `json:"request_id"`
+	Result    string         `json:"result"`
+	Reason    string         `json:"reason"`
 	Summary   string         `json:"summary"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	Before    map[string]any `json:"before,omitempty"`
 	After     map[string]any `json:"after,omitempty"`
-	CreatedAt string         `json:"created_at"`
-}
-
-type auditOperationsEventResponse struct {
-	ID        string         `json:"id"`
-	Event     string         `json:"event"`
-	ObjectKey string         `json:"object_key,omitempty"`
-	RecordID  string         `json:"record_id,omitempty"`
-	ActorID   string         `json:"actor_id"`
-	Summary   string         `json:"summary"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt string         `json:"created_at"`
 }
 
@@ -59,26 +39,26 @@ type auditPageResponse[T any] struct {
 	RetentionDays  int    `json:"retention_days"`
 }
 
-func auditBusinessResponse(result auditapp.AuditQueryResult) auditPageResponse[auditBusinessEventResponse] {
-	items := make([]auditBusinessEventResponse, 0, len(result.Items))
-	for _, event := range result.Items {
-		items = append(items, auditBusinessEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, Summary: event.Summary, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
-	}
-	return auditPage(result, items)
+func auditBusinessResponse(result auditapp.AuditQueryResult) auditPageResponse[auditEventResponse] {
+	return auditEventPageResponse(result)
 }
 
-func auditGovernanceResponse(result auditapp.AuditQueryResult) auditPageResponse[auditGovernanceEventResponse] {
-	items := make([]auditGovernanceEventResponse, 0, len(result.Items))
-	for _, event := range result.Items {
-		items = append(items, auditGovernanceEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, RoleKey: event.RoleKey, Summary: event.Summary, Metadata: event.Metadata, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt})
-	}
-	return auditPage(result, items)
+func auditGovernanceResponse(result auditapp.AuditQueryResult) auditPageResponse[auditEventResponse] {
+	return auditEventPageResponse(result)
 }
 
-func auditOperationsResponse(result auditapp.AuditQueryResult) auditPageResponse[auditOperationsEventResponse] {
-	items := make([]auditOperationsEventResponse, 0, len(result.Items))
+func auditOperationsResponse(result auditapp.AuditQueryResult) auditPageResponse[auditEventResponse] {
+	return auditEventPageResponse(result)
+}
+
+func auditEventPageResponse(result auditapp.AuditQueryResult) auditPageResponse[auditEventResponse] {
+	items := make([]auditEventResponse, 0, len(result.Items))
 	for _, event := range result.Items {
-		items = append(items, auditOperationsEventResponse{ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID, ActorID: event.ActorID, Summary: event.Summary, Metadata: event.Metadata, CreatedAt: event.CreatedAt})
+		items = append(items, auditEventResponse{
+			ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
+			ActorID: event.ActorID, RoleKey: event.RoleKey, RequestID: event.RequestID, Result: event.Result, Reason: event.Reason,
+			Summary: event.Summary, Metadata: event.Metadata, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt,
+		})
 	}
 	return auditPage(result, items)
 }
