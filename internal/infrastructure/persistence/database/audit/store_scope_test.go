@@ -11,6 +11,7 @@ import (
 	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
+	"github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 
@@ -117,6 +118,7 @@ func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
 		{ID: "auth-prefix", WorkspaceID: "workspace", Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
 		{ID: "authentication-prefix", WorkspaceID: "workspace", Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
 		{ID: "oauth-governance", WorkspaceID: "workspace", Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
+		{ID: "export-conflict", WorkspaceID: "workspace", Event: "audit_export_conflict", ObjectKey: "audit_events", CreatedAt: "2026-09-03T00:00:05Z"},
 	}
 	for _, event := range events {
 		if err := store.AppendPrepared(t.Context(), event); err != nil {
@@ -128,13 +130,40 @@ func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertAuditStoreEventIDs(t, operations, "authentication-prefix", "auth-prefix", "auth-exact")
+	assertAuditStoreEventIDs(t, operations, "export-conflict", "authentication-prefix", "auth-prefix", "auth-exact")
 
 	governance, err := store.ListSystem(t.Context(), contract.Query{Class: contract.EventClassGovernance})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertAuditStoreEventIDs(t, governance, "oauth-governance")
+}
+
+func TestOperationsClassPredicateRendersExportConflictForEveryDialect(t *testing.T) {
+	for _, driver := range []string{"sqlite", "postgres", "mysql"} {
+		t.Run(driver, func(t *testing.T) {
+			renderer, err := ormdialect.ParseRenderer(driver, "audit_scope", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			statement, arguments, err := query.NewSelectBuilder(renderer, "_audit_events").
+				Columns("id").
+				Where(auditOperationsClassPredicate(auditEventClassExpression())).
+				Build()
+			if err != nil || strings.TrimSpace(statement) == "" {
+				t.Fatalf("statement=%q err=%v", statement, err)
+			}
+			found := false
+			for _, argument := range arguments {
+				if argument == "audit_export_conflict" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("audit_export_conflict is absent from %s operations predicate: statement=%s args=%v", driver, statement, arguments)
+			}
+		})
+	}
 }
 
 func openAuditStoreTestDatabase(t *testing.T) (*sql.DB, ormdialect.Renderer) {

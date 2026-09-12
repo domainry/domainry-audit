@@ -342,6 +342,7 @@ func auditOperationsClassPredicate(value query.Expression) query.Predicate {
 		query.LikeValueEscaped(event, escapeSQLLike("auth.")+"%"),
 		query.LikeValueEscaped(event, escapeSQLLike("authentication_")+"%"),
 		query.LikeValueEscaped(event, escapeSQLLike("authentication.")+"%"),
+		query.EqualValue(event, "audit_export_conflict"),
 		auditClassMarkerPredicate(value, contract.EventClassMarkers(contract.EventClassOperations)),
 	)
 }

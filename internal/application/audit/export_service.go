@@ -123,7 +123,7 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 	if exportHash(token) != stored.TokenSHA256 {
 		return contract.ExportPrepared{}, exportError("export_integrity_failed", nil)
 	}
-	if err := s.appendExportAudit(ctx, "audit_export_prepared", principal, stored, map[string]any{"idempotency_replayed": !created, "result": "success"}); err != nil {
+	if err := s.appendExportAudit(ctx, "audit_export_prepared", principal, stored, map[string]any{"idempotency_replayed": !created, "result": "success", "reason": "export_prepared"}); err != nil {
 		return contract.ExportPrepared{}, err
 	}
 	return preparedExport(stored, token), nil
@@ -175,7 +175,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 		return nil, "", exportError("export_persistence_failed", err)
 	}
 	if first {
-		if err := s.appendExportAudit(ctx, "audit_export_downloaded", principal, a, map[string]any{"result": "success"}); err != nil {
+		if err := s.appendExportAudit(ctx, "audit_export_downloaded", principal, a, map[string]any{"result": "success", "reason": "export_downloaded"}); err != nil {
 			return nil, "", err
 		}
 	}

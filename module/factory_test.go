@@ -228,6 +228,13 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 			if event.Event != wantEvent {
 				t.Fatalf("request %s event=%s want=%s", requestID, event.Event, wantEvent)
 			}
+			wantReason := map[string]string{
+				"audit_export_prepared":   "export_prepared",
+				"audit_export_downloaded": "export_downloaded",
+			}[event.Event]
+			if wantReason != "" && event.Metadata["reason"] != wantReason {
+				t.Fatalf("request %s reason=%v want=%s", requestID, event.Metadata["reason"], wantReason)
+			}
 			seen[requestID]++
 		}
 		if requestID == "conflict-request-1" {
