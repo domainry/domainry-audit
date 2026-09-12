@@ -158,13 +158,13 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	eventClassValue := auditEventClassExpression()
 	switch strings.TrimSpace(queryValue.Class) {
 	case contract.EventClassOperations:
-		predicates = append(predicates, auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations)))
+		predicates = append(predicates, auditOperationsClassPredicate(eventClassValue))
 	case contract.EventClassGovernance:
-		operations := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations))
+		operations := auditOperationsClassPredicate(eventClassValue)
 		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
 		predicates = append(predicates, query.And(query.Not(operations), governance))
 	case contract.EventClassBusiness:
-		operations := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassOperations))
+		operations := auditOperationsClassPredicate(eventClassValue)
 		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
 		predicates = append(predicates, query.And(query.Not(operations), query.Not(governance)))
 	}
@@ -332,4 +332,16 @@ func auditClassMarkerPredicate(value query.Expression, markers []string) query.P
 		return query.AlwaysFalse()
 	}
 	return query.Or(predicates...)
+}
+
+func auditOperationsClassPredicate(value query.Expression) query.Predicate {
+	event := query.Lower(query.Coalesce(query.Column("event"), query.Value("")))
+	return query.Or(
+		query.EqualValue(event, "auth"),
+		query.LikeValueEscaped(event, escapeSQLLike("auth_")+"%"),
+		query.LikeValueEscaped(event, escapeSQLLike("auth.")+"%"),
+		query.LikeValueEscaped(event, escapeSQLLike("authentication_")+"%"),
+		query.LikeValueEscaped(event, escapeSQLLike("authentication.")+"%"),
+		auditClassMarkerPredicate(value, contract.EventClassMarkers(contract.EventClassOperations)),
+	)
 }

@@ -109,6 +109,34 @@ func TestEraseSubjectIsAtomicAcrossAllMatchingAuditEvents(t *testing.T) {
 	}
 }
 
+func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
+	database, renderer := openAuditStoreTestDatabase(t)
+	store := NewStore(database, renderer)
+	events := []contract.Event{
+		{ID: "auth-exact", WorkspaceID: "workspace", Event: "auth", ObjectKey: "session", CreatedAt: "2026-09-03T00:00:01Z"},
+		{ID: "auth-prefix", WorkspaceID: "workspace", Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
+		{ID: "authentication-prefix", WorkspaceID: "workspace", Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
+		{ID: "oauth-governance", WorkspaceID: "workspace", Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
+	}
+	for _, event := range events {
+		if err := store.AppendPrepared(t.Context(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	operations, err := store.ListSystem(t.Context(), contract.Query{Class: contract.EventClassOperations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAuditStoreEventIDs(t, operations, "authentication-prefix", "auth-prefix", "auth-exact")
+
+	governance, err := store.ListSystem(t.Context(), contract.Query{Class: contract.EventClassGovernance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAuditStoreEventIDs(t, governance, "oauth-governance")
+}
+
 func openAuditStoreTestDatabase(t *testing.T) (*sql.DB, ormdialect.Renderer) {
 	t.Helper()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -149,4 +177,24 @@ func appendAuditStoreTestEvent(t *testing.T, store *Store, id, workspaceID, acto
 func auditStoreTestWhere(statement string) string {
 	_, where, _ := strings.Cut(statement, " WHERE ")
 	return where
+}
+
+func assertAuditStoreEventIDs(t *testing.T, events []contract.Event, want ...string) {
+	t.Helper()
+	if len(events) != len(want) {
+		t.Fatalf("event ids=%v want=%v", auditStoreEventIDs(events), want)
+	}
+	for index := range want {
+		if events[index].ID != want[index] {
+			t.Fatalf("event ids=%v want=%v", auditStoreEventIDs(events), want)
+		}
+	}
+}
+
+func auditStoreEventIDs(events []contract.Event) []string {
+	ids := make([]string, len(events))
+	for index := range events {
+		ids[index] = events[index].ID
+	}
+	return ids
 }
