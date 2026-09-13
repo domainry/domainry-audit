@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-orm/query"
 )
 
@@ -54,9 +55,20 @@ func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string)
 }
 
 func (s *Store) EraseSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
+	return s.EraseSubjectResources(ctx, workspaceID, identity, nil)
+}
+
+func (s *Store) EraseSubjectResources(ctx context.Context, workspaceID, identity string, resources []contract.SubjectResource) (json.RawMessage, error) {
 	workspaceID, identity = strings.TrimSpace(workspaceID), strings.TrimSpace(identity)
 	if workspaceID == "" || identity == "" {
 		return nil, fmt.Errorf("audit subject identity is required")
+	}
+	predicates := []query.Predicate{query.Equal("actor_id", identity)}
+	for _, resource := range resources {
+		if strings.TrimSpace(resource.ObjectKey) == "" || strings.TrimSpace(resource.RecordID) == "" {
+			return nil, fmt.Errorf("audit subject resource scope is required")
+		}
+		predicates = append(predicates, query.And(query.Equal("object_key", resource.ObjectKey), query.Equal("record_id", resource.RecordID)))
 	}
 	sum := sha256.Sum256([]byte(workspaceID + "\x00" + identity))
 	anonymous := "erased-" + hex.EncodeToString(sum[:12])
@@ -64,34 +76,36 @@ func (s *Store) EraseSubject(ctx context.Context, workspaceID, identity string) 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	candidate, candidateArgs, err := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", workspaceID).
-		Projections(query.Project(query.CountAll())).Where(query.Equal("actor_id", identity)).Build()
-	if err != nil {
-		return nil, err
-	}
-	var expected int64
-	if err := tx.QueryRowContext(ctx, candidate, candidateArgs...).Scan(&expected); err != nil {
-		return nil, err
+	defer tx.Rollback()
+	var changed int64
+	// One source-owned transaction covers actor data and every declared record.
+	// Keep event identity and time, but remove historical personal snapshots.
+	for _, predicate := range predicates {
+		statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).
+			Set("summary", "[erased]").Set("metadata_json", "{}").Set("before_json", "null").Set("after_json", "null").Where(predicate).Build()
+		if err != nil {
+			return nil, err
+		}
+		result, err := tx.ExecContext(ctx, statement, args...)
+		if err != nil {
+			return nil, err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		changed += count
 	}
 	statement, args, err := query.NewWorkspaceUpdateBuilder(s.renderer, "_audit_events", workspaceID).
-		Set("actor_id", anonymous).Where(query.Equal("actor_id", identity)).Build()
+		Set("actor_id", anonymous).Set("actor_org_id", nil).Set("role_key", "").Where(query.Equal("actor_id", identity)).Build()
 	if err != nil {
 		return nil, err
 	}
-	result, err := tx.ExecContext(ctx, statement, args...)
-	if err != nil {
+	if _, err = tx.ExecContext(ctx, statement, args...); err != nil {
 		return nil, err
 	}
-	changed, err := result.RowsAffected()
-	if err != nil {
+	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	if changed != expected {
-		return nil, fmt.Errorf("audit subject candidate set changed during anonymization")
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{"anonymized_audit_references": changed, "event_integrity_preserved": true, "at": time.Now().UTC()})
+	return json.Marshal(map[string]any{"redacted_audit_matches": changed, "event_identity_preserved": true, "at": time.Now().UTC()})
 }

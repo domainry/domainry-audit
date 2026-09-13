@@ -3,6 +3,7 @@ package auditapp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
@@ -71,4 +72,12 @@ func (s *Service) ExportSubject(ctx context.Context, workspaceID, identity strin
 }
 func (s *Service) EraseSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
 	return s.store.EraseSubject(ctx, workspaceID, identity)
+}
+
+func (s *Service) EraseSubjectResources(ctx context.Context, workspaceID, identity string, resources []contract.SubjectResource) (json.RawMessage, error) {
+	store, ok := s.store.(contract.SubjectResourceLifecycle)
+	if !ok {
+		return nil, fmt.Errorf("audit subject resource erasure unavailable")
+	}
+	return store.EraseSubjectResources(ctx, workspaceID, identity, resources)
 }
