@@ -1,5 +1,7 @@
 # Domainry Audit
 
+Product Agent question index: [`capability/agent/index.json`](capability/agent/index.json). Ordinary mutation evidence is appended automatically by Runtime and is intentionally absent from product Agent routing; the remaining guide covers only an explicit audit-history or evidence-export product requirement.
+
 The source-owned Audit business module used by Domainry Runtime and other
 Domainry modules. It borrows a host database pool, owns `_audit_events` and
 `_audit_export_artifacts`, and can append mandatory evidence inside a host-owned
