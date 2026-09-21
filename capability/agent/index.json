@@ -1,3 +1,87 @@
-{"contract_version":"domainry-agent-guide-index-v2","owner":{"kind":"module","key":"audit"},"guides":[
-  {"key":"query_export","question":"How should authorized users query or export audit history?","path":"capability/agent/query-export.md","problems_solved":["Enables authorized investigation and evidence delivery without exposing an unrestricted event store or rebuilding history from logs."],"business_scenarios":["Exporting all customer-change evidence for a regulator-defined date range.","Reviewing one subject's lifecycle history or one administrator's privileged actions during an incident."],"requirement_signals":["audit trail","who changed what and when","compliance review","date range","subject history","audit export"],"use_when":["The product explicitly needs an authorized audit-history view or evidence export"],"do_not_use_when":["The requirement is ordinary business mutation evidence, which Runtime appends automatically, or current health metrics and product analytics"],"capability_keys":["audit.query","audit.export","audit.subject_lifecycle"],"module_keys":["identity","lifecycle"],"related_guides":[]}
-]}
+{
+  "contract_version": "domainry-agent-guide-index-v3",
+  "owner": {
+    "kind": "module",
+    "key": "audit"
+  },
+  "guides": [
+    {
+      "key": "append_evidence",
+      "question": "When should a source owner append an Audit event?",
+      "path": "capability/agent/append-evidence.md",
+      "problems_solved": [
+        "Captures immutable actor-attributed evidence for committed business or administrative effects without making Audit decide or execute the change."
+      ],
+      "business_scenarios": [
+        "An order approval records actor, operation, subject, outcome, reason, and correlation after the authoritative transaction commits.",
+        "A privileged Role or provider configuration change records before/after evidence without copying secrets into Audit."
+      ],
+      "requirement_signals": [
+        "append audit event",
+        "committed effect",
+        "denied privileged attempt",
+        "configuration change evidence",
+        "correlation"
+      ],
+      "use_when": [
+        "A committed effect or security-sensitive attempt must be attributable and reviewable"
+      ],
+      "do_not_use_when": [
+        "The data is a debug log, metric, transient retry, uncommitted intent, or secret payload"
+      ],
+      "related_guides": [
+        "query_export"
+      ],
+      "provided_capability_keys": [
+        "audit.append"
+      ],
+      "required_capability_keys": [],
+      "embedded_capability_keys": [],
+      "required_owner_keys": [
+        "identity"
+      ],
+      "usage_kind": "operations"
+    },
+    {
+      "key": "query_export",
+      "question": "How should authorized users query or export audit history?",
+      "path": "capability/agent/query-export.md",
+      "problems_solved": [
+        "Enables authorized investigation and evidence delivery without exposing an unrestricted event store or rebuilding history from logs."
+      ],
+      "business_scenarios": [
+        "Exporting all customer-change evidence for a regulator-defined date range.",
+        "Reviewing one subject's lifecycle history or one administrator's privileged actions during an incident."
+      ],
+      "requirement_signals": [
+        "audit trail",
+        "who changed what and when",
+        "compliance review",
+        "date range",
+        "subject history",
+        "audit export"
+      ],
+      "use_when": [
+        "The product explicitly needs an authorized audit-history view or evidence export"
+      ],
+      "do_not_use_when": [
+        "The requirement is ordinary business mutation evidence, which Runtime appends automatically, or current health metrics and product analytics"
+      ],
+      "related_guides": [
+        "append_evidence"
+      ],
+      "provided_capability_keys": [
+        "audit.query",
+        "audit.export",
+        "audit.subject_lifecycle"
+      ],
+      "required_capability_keys": [],
+      "embedded_capability_keys": [],
+      "required_owner_keys": [
+        "identity",
+        "lifecycle"
+      ],
+      "usage_kind": "operations"
+    }
+  ]
+}

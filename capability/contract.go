@@ -1,15 +1,16 @@
-package module
+package capability
 
 import (
 	"encoding/json"
 	"strings"
 
+	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
-func NewCapabilityBinding() (*modulecapability.StaticBinding, error) {
-	adapter := &AuditHTTPAdapter{}
+func openContract(_ Inputs) (*modulecapability.StaticBinding, error) {
+	adapter := &audithttp.AuditHTTPAdapter{}
 	allRoutes := adapter.Routes()
 	operations := adapter.OpenAPIOperations()
 	groups := map[string][]modulehttp.Route{}
@@ -36,14 +37,9 @@ func NewCapabilityBinding() (*modulecapability.StaticBinding, error) {
 	summary := modulecapability.ModuleSummary{
 		Identity: modulecapability.ModuleIdentity{Key: "audit", SourceOwner: "audit", ModuleVersion: "domainry-audit-protocol-v1", ValidationRevision: "audit-owner-validation-v1", SupportedDeploymentModes: []modulecapability.DeploymentMode{modulecapability.DeploymentModeModule}},
 		Name:     "Audit", Description: "Immutable business, governance, technical, and security event history with scoped query and export.",
-		Scenarios: modulecapability.AdaptationScenarios{
-			UseWhen:              []string{"A PRD requires immutable evidence of business or administrative changes, actor history, compliance review, or scoped audit export"},
-			DoNotUseWhen:         []string{"The requirement is application logging, metrics, or transient debugging telemetry without an immutable audit-evidence obligation"},
-			RequirementSignals:   []string{"audit trail", "who changed what and when", "compliance evidence", "immutable event export", "subject lifecycle evidence"},
+		Composition: modulecapability.ModuleComposition{
 			ProvidedCapabilities: []string{"audit.append", "audit.query", "audit.export", "audit.subject_lifecycle"}, RequiredModules: []string{"identity"}, OptionalModules: []string{"lifecycle"}, ConflictingModules: []string{},
 			AssemblyChains: []string{"business_mutation_to_transactional_audit_append", "audit_retention_with_lifecycle_policy", "identity_scope_before_audit_query_or_export"}, ValidationScopes: []string{},
-			SelectionExamples: []modulecapability.ScenarioExample{{Requirement: "Compliance users must export who changed a customer record during a date range", Reason: "Audit owns immutable actor-attributed event history and scoped export"}},
-			RejectionExamples: []modulecapability.ScenarioExample{{Requirement: "Show service latency and error-rate charts", Reason: "Monitoring owns operational telemetry; no immutable audit history is requested"}},
 		},
 	}
 	return modulecapability.NewStaticBinding(summary, documents, nil)

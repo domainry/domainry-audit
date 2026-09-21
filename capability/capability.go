@@ -3,12 +3,11 @@
 package capability
 
 import (
-	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
 	"github.com/domainry/domainry-foundation/modulecapability"
 )
 
 type Inputs struct{}
 
-func Open(Inputs) (*modulecapability.StaticBinding, error) {
-	return audithttp.NewCapabilityBinding()
+func Open(inputs Inputs) (*modulecapability.StaticBinding, error) {
+	return openContract(inputs)
 }
