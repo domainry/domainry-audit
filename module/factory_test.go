@@ -46,7 +46,6 @@ func newTestHost(t *testing.T, db *sql.DB) testHost {
 func (h testHost) Database() modulehost.Database                       { return h.database }
 func (h testHost) Dialect() modulehost.Dialect                         { return h.dialect }
 func (h testHost) Migrations() modulehost.MigrationRegistrar           { return testMigrationRegistrar{host: h} }
-func (h testHost) ArtifactStore() sharedartifact.ManagedStore          { return h.artifacts }
 func (h testHost) ArtifactContentStore() sharedartifact.ContentStore   { return h.artifacts }
 func (h testHost) ArtifactContentWriter() sharedartifact.ContentWriter { return h.artifacts }
 
@@ -71,7 +70,6 @@ func (h artifactOnlyHost) Dialect() modulehost.Dialect   { return h.dialect }
 func (h artifactOnlyHost) Migrations() modulehost.MigrationRegistrar {
 	return testMigrationRegistrar{host: testHost{database: h.database, dialect: h.dialect}}
 }
-func (h artifactOnlyHost) ArtifactStore() sharedartifact.ManagedStore        { return h.artifacts }
 func (h artifactOnlyHost) ArtifactContentStore() sharedartifact.ContentStore { return h.artifacts }
 func (h artifactOnlyHost) ArtifactContentWriter() sharedartifact.ContentWriter {
 	return h.artifacts

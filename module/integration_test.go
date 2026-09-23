@@ -42,7 +42,6 @@ type integrationHost struct {
 func (h integrationHost) Database() modulehost.Database                       { return h.database }
 func (h integrationHost) Dialect() modulehost.Dialect                         { return h.dialect }
 func (h integrationHost) Migrations() modulehost.MigrationRegistrar           { return h.registrar }
-func (h integrationHost) ArtifactStore() sharedartifact.ManagedStore          { return h.artifacts }
 func (h integrationHost) ArtifactContentStore() sharedartifact.ContentStore   { return h.artifacts }
 func (h integrationHost) ArtifactContentWriter() sharedartifact.ContentWriter { return h.artifacts }
 
@@ -85,7 +84,7 @@ func TestIntegrationOpenModuleSubmitsSourceMigrationsToHostSingleLedger(t *testi
 	owners := append([]string(nil), host.registrar.owners...)
 	submitted := append([][]modulehost.SchemaMigration(nil), host.registrar.migrations...)
 	host.registrar.mu.Unlock()
-	if !reflect.DeepEqual(owners, []string{"audit", "shared/operations"}) || len(submitted) != 2 {
+	if !reflect.DeepEqual(owners, []string{"audit", "shared/operations", "shared/artifacts"}) || len(submitted) != 3 {
 		t.Fatalf("host registrar calls: owners=%v submissions=%d", owners, len(submitted))
 	}
 	want, err := auditmodule.SchemaMigrations(host.dialect, "sqlite")
@@ -97,7 +96,7 @@ func TestIntegrationOpenModuleSubmitsSourceMigrationsToHostSingleLedger(t *testi
 	}
 
 	var versions int
-	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM _schema_migrations WHERE dirty = 0`).Scan(&versions); err != nil || versions != len(want)+1 {
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM _schema_migrations WHERE dirty = 0`).Scan(&versions); err != nil || versions != len(want)+2 {
 		t.Fatalf("host ledger completed versions=%d err=%v", versions, err)
 	}
 	rows, err := database.QueryContext(t.Context(), `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%schema%migration%' ORDER BY name`)

@@ -15,6 +15,7 @@ import (
 	auditstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
 	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
+	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sharedoperation "github.com/domainry/domainry-foundation/operation"
 )
@@ -61,14 +62,18 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	if err != nil {
 		return nil, fmt.Errorf("open Audit Operations persistence: %w", err)
 	}
-	var artifacts modulehost.ArtifactHost
-	if available, ok := host.(modulehost.ArtifactHost); ok && available.ArtifactStore() != nil && available.ArtifactContentStore() != nil && available.ArtifactContentWriter() != nil {
-		artifacts = available
+	var artifactContent modulehost.ArtifactHost
+	if available, ok := host.(modulehost.ArtifactHost); ok && available.ArtifactContentStore() != nil && available.ArtifactContentWriter() != nil {
+		artifactContent = available
 	}
-	exportReady := artifacts != nil
+	exportReady := artifactContent != nil
 	var exports *exportstore.Store
 	if exportReady {
-		exports = exportstore.NewStore(artifacts.ArtifactStore(), artifacts.ArtifactContentStore(), artifacts.ArtifactContentWriter(), operations)
+		artifacts, openErr := sharedartifact.Open(ctx, host.Database(), host.Dialect(), host.Migrations())
+		if openErr != nil {
+			return nil, fmt.Errorf("open Audit Artifact persistence: %w", openErr)
+		}
+		exports = exportstore.NewStore(artifacts, artifactContent.ArtifactContentStore(), artifactContent.ArtifactContentWriter(), operations)
 	} else {
 		exports = exportstore.NewStore(nil, nil, nil, nil)
 	}
