@@ -16,13 +16,12 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
 	"github.com/domainry/domainry-audit/internal/testsupport/artifactfixture"
+	"github.com/domainry/domainry-audit/internal/testsupport/migrationfixture"
 	actioncontract "github.com/domainry/domainry-foundation/action"
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
-	sharedoperation "github.com/domainry/domainry-foundation/operation"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	ormmigration "github.com/domainry/domainry-orm/migration"
 	_ "modernc.org/sqlite"
 )
 
@@ -31,7 +30,7 @@ type fixedClock struct{ value time.Time }
 func (c fixedClock) Now() time.Time { return c.value }
 
 type testHost struct {
-	database  modulehost.Database
+	database  *sql.DB
 	dialect   modulehost.Dialect
 	artifacts *artifactfixture.Store
 }
@@ -50,24 +49,19 @@ func (h testHost) Migrations() modulehost.MigrationRegistrar           { return 
 func (h testHost) ArtifactStore() sharedartifact.ManagedStore          { return h.artifacts }
 func (h testHost) ArtifactContentStore() sharedartifact.ContentStore   { return h.artifacts }
 func (h testHost) ArtifactContentWriter() sharedartifact.ContentWriter { return h.artifacts }
-func (h testHost) OperationStore() sharedoperation.Store               { return h.artifacts }
 
 type testMigrationRegistrar struct{ host testHost }
 
 func (testMigrationRegistrar) Driver() string { return "sqlite" }
 func (testMigrationRegistrar) Schema() string { return "" }
-func (r testMigrationRegistrar) ApplyOwnedMigrations(ctx context.Context, _ string, migrations []modulehost.SchemaMigration) error {
-	runner, err := ormmigration.NewRunner(r.host.database, r.host.dialect, ormmigration.Options{})
-	if err != nil {
-		return err
-	}
-	return runner.Apply(ctx, migrations)
+func (r testMigrationRegistrar) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
+	return (migrationfixture.Registrar{Database: r.host.database}).Apply(ctx, owner, migrations)
 }
 
-// artifactOnlyHost proves that Artifact storage alone cannot advertise a
-// business export whose command receipt would be missing from _operations.
+// artifactOnlyHost proves that an Artifact-capable host can advertise export
+// without constructing or injecting a shared Operation Store.
 type artifactOnlyHost struct {
-	database  modulehost.Database
+	database  *sql.DB
 	dialect   modulehost.Dialect
 	artifacts *artifactfixture.Store
 }
@@ -130,7 +124,7 @@ func TestModuleUsesBorrowedHostDatabase(t *testing.T) {
 	}
 }
 
-func TestBusinessExportRequiresSharedOperationAndArtifactPorts(t *testing.T) {
+func TestBusinessExportBuildsItsOwnOperationStoreFromHostPrimitives(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -144,8 +138,8 @@ func TestBusinessExportRequiresSharedOperationAndArtifactPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer binding.Close(context.Background())
-	if binding.Descriptor().Capabilities.Export {
-		t.Fatal("Artifact-only Audit host advertised export without a shared Operation receipt store")
+	if !binding.Descriptor().Capabilities.Export {
+		t.Fatal("Artifact-capable Audit host did not advertise export after opening its local Operation Store")
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
 	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	sharedoperation "github.com/domainry/domainry-foundation/operation"
 )
 
 type Options struct{ Clock contractClock }
@@ -56,18 +57,18 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 	}
 	events := auditstore.NewStore(host.Database(), host.Dialect())
 	auditService := auditapp.NewService(events, f.options.Clock)
+	operations, err := sharedoperation.Open(ctx, host.Database(), host.Dialect(), host.Migrations())
+	if err != nil {
+		return nil, fmt.Errorf("open Audit Operations persistence: %w", err)
+	}
 	var artifacts modulehost.ArtifactHost
 	if available, ok := host.(modulehost.ArtifactHost); ok && available.ArtifactStore() != nil && available.ArtifactContentStore() != nil && available.ArtifactContentWriter() != nil {
 		artifacts = available
 	}
-	var operations modulehost.OperationHost
-	if available, ok := host.(modulehost.OperationHost); ok && available.OperationStore() != nil {
-		operations = available
-	}
-	exportReady := artifacts != nil && operations != nil
+	exportReady := artifacts != nil
 	var exports *exportstore.Store
 	if exportReady {
-		exports = exportstore.NewStore(artifacts.ArtifactStore(), artifacts.ArtifactContentStore(), artifacts.ArtifactContentWriter(), operations.OperationStore())
+		exports = exportstore.NewStore(artifacts.ArtifactStore(), artifacts.ArtifactContentStore(), artifacts.ArtifactContentWriter(), operations)
 	} else {
 		exports = exportstore.NewStore(nil, nil, nil, nil)
 	}
