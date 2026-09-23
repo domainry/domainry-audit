@@ -17,14 +17,14 @@ func TestBusinessQueryOwnsPaginationRetentionAndRedaction(t *testing.T) {
 		t.Fatalf("business plan=%#v", plan)
 	}
 	result := ProjectQuery([]contract.Event{
-		{ID: "newer", Event: "order.updated", ActorID: "actor-1", RoleKey: "manager", Metadata: map[string]any{"request_id": "req-1", "decision": "approved", "reason": "policy_match", "token": "secret"}, Before: map[string]any{"password": "secret"}, CreatedAt: now.Format(time.RFC3339)},
-		{ID: "older", Event: "order.created", ActorID: "actor-1", CreatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
+		{ID: "newer", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "actor-1", RoleKey: "manager", Metadata: map[string]any{"request_id": "req-1", "decision": "approved", "reason": "policy_match", "token": "secret"}, Before: map[string]any{"password": "secret"}, CreatedAt: now.Format(time.RFC3339)},
+		{ID: "older", Family: contract.EventFamilyBusinessEntity, Event: "order.created", ActorID: "actor-1", CreatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
 	}, plan)
 	if !result.Truncated || result.NextCursor == "" || len(result.Items) != 1 || result.Items[0].Before["password"] != "[REDACTED]" {
 		t.Fatalf("business result=%#v", result)
 	}
 	item := result.Items[0]
-	if item.RoleKey != "manager" || item.RequestID != "req-1" || item.Result != "approved" || item.Reason != "policy_match" || item.Metadata["token"] != "[REDACTED]" {
+	if item.RoleKey != "manager" || item.RequestID != "req-1" || item.OperationID != "operation-1" || item.CausationID != "cause-1" || item.OwnerRunID != "workflow-1" || item.Result != "approved" || item.Reason != "policy_match" || item.Metadata["token"] != "[REDACTED]" {
 		t.Fatalf("business projection=%#v", item)
 	}
 }
@@ -37,14 +37,17 @@ func TestEveryAuditClassProjectsTheSameTraceFieldsAndRedactedMaps(t *testing.T) 
 			t.Fatal(err)
 		}
 		eventName := "order.failed"
+		family := contract.EventFamilyBusinessEntity
 		if kind == EventClassGovernance {
 			eventName = "identity_role_failed"
+			family = contract.EventFamilyIdentityGovernance
 		}
 		if kind == EventClassOperations {
 			eventName = "auth_login_failed"
+			family = contract.EventFamilyIdentitySecurity
 		}
 		result := ProjectQuery([]contract.Event{{
-			ID: "event-1", Event: eventName, ActorID: "actor-1", RoleKey: "member", CreatedAt: now.Format(time.RFC3339),
+			ID: "event-1", Family: family, Event: eventName, ActorID: "actor-1", RoleKey: "member", CreatedAt: now.Format(time.RFC3339),
 			Metadata: map[string]any{"request_id": "request-1", "error_code": "denied_by_policy", "secret": "hidden"},
 			Before:   map[string]any{"password": "before-secret"}, After: map[string]any{"token": "after-secret"},
 		}}, plan)

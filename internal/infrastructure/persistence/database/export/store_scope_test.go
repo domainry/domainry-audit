@@ -2,35 +2,97 @@ package exportstore
 
 import (
 	"context"
-	"database/sql"
-	"strings"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
-	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
-	ormdialect "github.com/domainry/domainry-orm/dialect"
-	ormmigration "github.com/domainry/domainry-orm/migration"
-	_ "modernc.org/sqlite"
+	"github.com/domainry/domainry-audit/internal/testsupport/artifactfixture"
+	sharedartifact "github.com/domainry/domainry-foundation/artifact"
+	sharedoperation "github.com/domainry/domainry-foundation/operation"
 )
 
-type exportCaptureDatabase struct {
-	*sql.DB
-	lastQuery string
+func TestExportRegistrationFailureDeletesOnlyUnreferencedContent(t *testing.T) {
+	backend := artifactfixture.New()
+	registerErr := errors.New("register failed")
+	artifacts := &failingExportArtifactStore{ManagedStore: backend, err: registerErr}
+	store := NewStore(artifacts, backend, backend, backend)
+	value := exportStoreTestArtifact()
+	if _, _, err := store.CreateOrGetExport(t.Context(), value); !errors.Is(err, registerErr) {
+		t.Fatalf("create err=%v", err)
+	}
+	reference := "memory:audit-export:" + exportID(value)
+	if _, err := backend.Stat(t.Context(), value.WorkspaceID, reference); !errors.Is(err, sharedartifact.ErrContentNotFound) {
+		t.Fatalf("unregistered content remains: %v", err)
+	}
+
+	artifacts.commitThenFail = true
+	if replay, created, err := store.CreateOrGetExport(t.Context(), value); err != nil || created || replay.ID != exportID(value) {
+		t.Fatalf("uncertain register replay=%#v created=%v err=%v", replay, created, err)
+	}
+	if _, err := backend.Stat(t.Context(), value.WorkspaceID, reference); err != nil {
+		t.Fatalf("registered content was deleted: %v", err)
+	}
 }
 
-func (database *exportCaptureDatabase) QueryRowContext(ctx context.Context, statement string, args ...any) *sql.Row {
-	database.lastQuery = statement
-	return database.DB.QueryRowContext(ctx, statement, args...)
+type failingExportArtifactStore struct {
+	sharedartifact.ManagedStore
+	err            error
+	commitThenFail bool
 }
 
-func TestExportArtifactReadsAndWritesStayWithinRequesterScope(t *testing.T) {
-	database, renderer := openExportStoreTestDatabase(t)
-	capture := &exportCaptureDatabase{DB: database}
-	store := NewStore(capture, renderer)
+func (s *failingExportArtifactStore) Register(ctx context.Context, value sharedartifact.Artifact) (sharedartifact.Artifact, bool, error) {
+	if s.commitThenFail {
+		persisted, created, err := s.ManagedStore.Register(ctx, value)
+		if err != nil {
+			return persisted, created, err
+		}
+		return persisted, created, s.err
+	}
+	return sharedartifact.Artifact{}, false, s.err
+}
+
+func TestExportArtifactsUseSharedMetadataContentAndRequesterBinding(t *testing.T) {
+	backend := artifactfixture.New()
+	contentStore := &observedContentStore{delegate: backend}
+	store := NewStore(backend, contentStore, backend, backend)
 	artifact, created, err := store.CreateOrGetExport(t.Context(), exportStoreTestArtifact())
 	if err != nil || !created {
 		t.Fatalf("create artifact=%#v created=%v err=%v", artifact, created, err)
+	}
+
+	shared, found, err := backend.ByID(t.Context(), artifact.WorkspaceID, artifact.ID)
+	if err != nil || !found || shared.Owner != sharedartifact.OwnerAudit || shared.Kind != "export" || shared.StorageReference == "" || len(shared.Metadata) == 0 {
+		t.Fatalf("shared artifact=%#v found=%v err=%v", shared, found, err)
+	}
+	bindings, err := backend.Bindings(t.Context(), artifact.WorkspaceID, artifact.ID)
+	if err != nil || len(bindings) != 2 {
+		t.Fatalf("artifact bindings=%#v err=%v", bindings, err)
+	}
+	bindingKinds := map[string]string{}
+	for _, binding := range bindings {
+		bindingKinds[binding.Kind] = binding.ResourceID
+	}
+	if bindingKinds[sharedartifact.BindingSubject] != "requester" || bindingKinds[sharedartifact.BindingOperation] != exportOperationID(artifact.ID) {
+		t.Fatalf("artifact bindings=%#v", bindings)
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, artifact.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, claimed, err := backend.Claim(t.Context(), sharedoperation.Command{
+		ID: exportOperationID(artifact.ID), Scope: sharedoperation.Scope{WorkspaceID: artifact.WorkspaceID, ResourceType: "audit_export", ResourceID: artifact.ID},
+		Owner: exportOperationOwner, Kind: exportOperationKind, ActionKey: exportOperationActionKey,
+		IdempotencyKey: artifact.IdempotencyKey, RequestFingerprint: exportOperationFingerprint(artifact),
+		RequestedBy: artifact.RequesterUserID, Reason: "prepare audit export", Reference: artifact.ID,
+		StatusURL: "/api/audit/exports/" + artifact.ID, CreatedAt: createdAt,
+	})
+	if err != nil || claimed || operation.Status != sharedoperation.StatusSucceeded {
+		t.Fatalf("prepare operation=%#v claimed=%v err=%v", operation, claimed, err)
 	}
 
 	if _, found, err := store.ExportByTokenHashWithinDataScope(t.Context(), "workspace", artifact.TokenSHA256, "other", auditrepository.OwnerDataScope("other")); err != nil || found {
@@ -39,64 +101,71 @@ func TestExportArtifactReadsAndWritesStayWithinRequesterScope(t *testing.T) {
 	if _, found, err := store.ExportByTokenHashWithinDataScope(t.Context(), "workspace", artifact.TokenSHA256, "requester", auditrepository.DataScope{OrganizationIDs: []string{"org-a"}}); err != nil || found {
 		t.Fatalf("organization-only scope inferred artifact ownership: found=%v err=%v", found, err)
 	}
-	if current, found, err := store.ExportByTokenHashWithinDataScope(t.Context(), "workspace", artifact.TokenSHA256, "requester", auditrepository.OwnerDataScope("requester")); err != nil || !found || current.ID != artifact.ID {
+	if current, found, err := store.ExportByTokenHashWithinDataScope(t.Context(), "workspace", artifact.TokenSHA256, "requester", auditrepository.OwnerDataScope("requester")); err != nil || !found || current.ID != artifact.ID || len(current.Content) != 0 {
 		t.Fatalf("requester artifact=%#v found=%v err=%v", current, found, err)
 	}
+	if contentStore.opens != 0 {
+		t.Fatalf("metadata lookup opened Blob %d times", contentStore.opens)
+	}
+	authorizedAt := time.Date(2026, 9, 3, 0, 10, 0, 0, time.UTC)
+	if content, found, err := store.ExportContentWithinDataScope(t.Context(), "workspace", artifact.ID, artifact.TokenSHA256, "requester", authorizedAt, auditrepository.OwnerDataScope("requester")); err != nil || !found || string(content) != "content" {
+		t.Fatalf("authorized content=%q found=%v err=%v", content, found, err)
+	}
+	if contentStore.opens != 1 {
+		t.Fatalf("authorized content opened Blob %d times", contentStore.opens)
+	}
+	if _, found, err := store.ExportContentWithinDataScope(t.Context(), "workspace", artifact.ID, "wrong-token-hash", "requester", authorizedAt, auditrepository.OwnerDataScope("requester")); err != nil || found {
+		t.Fatalf("wrong token hash content found=%v err=%v", found, err)
+	}
+	if _, found, err := store.ExportContentWithinDataScope(t.Context(), "workspace", artifact.ID, artifact.TokenSHA256, "requester", time.Date(2026, 9, 3, 0, 15, 0, 0, time.UTC), auditrepository.OwnerDataScope("requester")); err != nil || found {
+		t.Fatalf("expired content found=%v err=%v", found, err)
+	}
+	if _, found, err := store.ExportContentWithinDataScope(t.Context(), "workspace", artifact.ID, artifact.TokenSHA256, "other", authorizedAt, auditrepository.OwnerDataScope("other")); err != nil || found {
+		t.Fatalf("foreign requester content found=%v err=%v", found, err)
+	}
+	if contentStore.opens != 1 {
+		t.Fatalf("denied content opened Blob; total opens=%d", contentStore.opens)
+	}
 
-	if first, err := store.RecordExportDownloadWithinDataScope(t.Context(), "workspace", artifact.ID, "other", "2026-09-03T00:01:00Z", auditrepository.OwnerDataScope("other")); err == nil || first {
-		t.Fatalf("another requester updated artifact: first=%v err=%v", first, err)
+	if recorded, err := store.RecordExportDownloadWithinDataScope(t.Context(), "workspace", artifact.ID, "other", "2026-09-03T00:01:00Z", auditrepository.OwnerDataScope("other")); err == nil || recorded {
+		t.Fatalf("another requester recorded download: recorded=%v err=%v", recorded, err)
 	}
-	var downloads int
-	if err := database.QueryRowContext(t.Context(), `SELECT download_count FROM _audit_export_artifacts WHERE workspace_id = 'workspace' AND id = ?`, artifact.ID).Scan(&downloads); err != nil || downloads != 0 {
-		t.Fatalf("denied update changed artifact: downloads=%d err=%v", downloads, err)
+	if recorded, err := store.RecordExportDownloadWithinDataScope(t.Context(), "workspace", artifact.ID, "requester", "2026-09-03T00:01:00Z", auditrepository.OwnerDataScope("requester")); err != nil || !recorded {
+		t.Fatalf("requester download record=%v err=%v", recorded, err)
 	}
-	if first, err := store.RecordExportDownloadWithinDataScope(t.Context(), "workspace", artifact.ID, "requester", "2026-09-03T00:01:00Z", auditrepository.OwnerDataScope("requester")); err != nil || !first {
-		t.Fatalf("requester update first=%v err=%v", first, err)
+	if recorded, err := store.RecordExportDownloadWithinDataScope(t.Context(), "workspace", artifact.ID, "requester", "2026-09-03T00:02:00Z", auditrepository.OwnerDataScope("requester")); err != nil || recorded {
+		t.Fatalf("repeat download record=%v err=%v", recorded, err)
 	}
-	if err := database.QueryRowContext(t.Context(), `SELECT download_count FROM _audit_export_artifacts WHERE workspace_id = 'workspace' AND id = ?`, artifact.ID).Scan(&downloads); err != nil || downloads != 1 {
-		t.Fatalf("requester update count=%d err=%v", downloads, err)
-	}
-
 	if _, found, err := store.ExportByTokenHashWithinDataScope(t.Context(), "workspace", artifact.TokenSHA256, "requester", auditrepository.AllDataScope()); err != nil || !found {
 		t.Fatalf("all artifact lookup found=%v err=%v", found, err)
 	}
-	_, where, _ := strings.Cut(capture.lastQuery, " WHERE ")
-	if !strings.Contains(where, "requester_user_id") || strings.Contains(where, " IN ") || strings.Contains(where, "1 = 0") {
-		t.Fatalf("all did not preserve the requester invariant without a data-range predicate: %s", capture.lastQuery)
-	}
 }
 
-func openExportStoreTestDatabase(t *testing.T) (*sql.DB, ormdialect.Renderer) {
-	t.Helper()
-	database, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	database.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = database.Close() })
-	renderer, err := ormdialect.ParseRenderer("sqlite", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrations, err := auditpersistence.SchemaMigrations(renderer, "sqlite")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner, err := ormmigration.NewRunner(database, renderer, ormmigration.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Apply(t.Context(), migrations); err != nil {
-		t.Fatal(err)
-	}
-	return database, renderer
+type observedContentStore struct {
+	delegate sharedartifact.ContentStore
+	opens    int
+}
+
+func (s *observedContentStore) Open(ctx context.Context, workspaceID, reference string) (io.ReadCloser, error) {
+	s.opens++
+	return s.delegate.Open(ctx, workspaceID, reference)
+}
+
+func (s *observedContentStore) Stat(ctx context.Context, workspaceID, reference string) (sharedartifact.ContentInfo, error) {
+	return s.delegate.Stat(ctx, workspaceID, reference)
+}
+
+func (s *observedContentStore) Delete(ctx context.Context, workspaceID, reference string) error {
+	return s.delegate.Delete(ctx, workspaceID, reference)
 }
 
 func exportStoreTestArtifact() contract.ExportArtifact {
+	content := []byte("content")
+	digest := sha256.Sum256(content)
 	return contract.ExportArtifact{
 		WorkspaceID: "workspace", RequesterUserID: "requester", RoleKey: "member", IdempotencyKey: "idempotency",
 		ScopeSHA256: "scope", AuthorizationScopeSHA256: "authorization", TokenSHA256: "token", Filename: "audit.csv",
-		ContentSHA256: "content", RowCount: 1, Content: []byte("content"), AuditIdentity: "audit", Status: "prepared",
+		ContentSHA256: hex.EncodeToString(digest[:]), RowCount: 1, Content: content, AuditIdentity: "audit", Status: "prepared",
 		CreatedAt: "2026-09-03T00:00:00Z", ExpiresAt: "2026-09-03T00:15:00Z",
 	}
 }

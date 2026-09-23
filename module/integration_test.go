@@ -16,9 +16,11 @@ import (
 	auditsdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	"github.com/domainry/domainry-audit/internal/testsupport/artifactfixture"
 	auditmodule "github.com/domainry/domainry-audit/module"
-	"github.com/domainry/domainry-foundation/modulecapability"
+	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	sharedoperation "github.com/domainry/domainry-foundation/operation"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
@@ -35,11 +37,16 @@ type integrationHost struct {
 	database  *sql.DB
 	dialect   ormdialect.Renderer
 	registrar *integrationMigrationRegistrar
+	artifacts *artifactfixture.Store
 }
 
-func (h integrationHost) Database() modulehost.Database             { return h.database }
-func (h integrationHost) Dialect() modulehost.Dialect               { return h.dialect }
-func (h integrationHost) Migrations() modulehost.MigrationRegistrar { return h.registrar }
+func (h integrationHost) Database() modulehost.Database                       { return h.database }
+func (h integrationHost) Dialect() modulehost.Dialect                         { return h.dialect }
+func (h integrationHost) Migrations() modulehost.MigrationRegistrar           { return h.registrar }
+func (h integrationHost) ArtifactStore() sharedartifact.ManagedStore          { return h.artifacts }
+func (h integrationHost) ArtifactContentStore() sharedartifact.ContentStore   { return h.artifacts }
+func (h integrationHost) ArtifactContentWriter() sharedartifact.ContentWriter { return h.artifacts }
+func (h integrationHost) OperationStore() sharedoperation.Store               { return h.artifacts }
 
 type integrationMigrationRegistrar struct {
 	database   *sql.DB
@@ -80,18 +87,6 @@ func TestIntegrationOpenModuleSubmitsSourceMigrationsToHostSingleLedger(t *testi
 	if err := descriptor.Validate(); err != nil || descriptor.Mode != auditsdk.DeploymentModeModule {
 		t.Fatalf("public descriptor must remain Module-only: descriptor=%+v err=%v", descriptor, err)
 	}
-	capabilities, ok := binding.(modulecapability.Binding)
-	if !ok {
-		t.Fatal("public binding does not expose its source-owned capability contract")
-	}
-	summary, err := capabilities.CapabilitySummary(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(summary.Identity.SupportedDeploymentModes, []modulecapability.DeploymentMode{modulecapability.DeploymentModeModule}) {
-		t.Fatalf("Audit capability invented a non-Module deployment mode: %v", summary.Identity.SupportedDeploymentModes)
-	}
-
 	host.registrar.mu.Lock()
 	owners := append([]string(nil), host.registrar.owners...)
 	submitted := append([][]modulehost.SchemaMigration(nil), host.registrar.migrations...)
@@ -103,7 +98,7 @@ func TestIntegrationOpenModuleSubmitsSourceMigrationsToHostSingleLedger(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(submitted[0], want) || len(want) != 3 {
+	if !reflect.DeepEqual(submitted[0], want) || len(want) != 2 {
 		t.Fatalf("submitted migrations differ from public source definitions: got=%+v want=%+v", submitted[0], want)
 	}
 
@@ -139,7 +134,7 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 	defer binding.Close(context.Background())
 
 	mutable := contract.AppendRequest{
-		Event: "order.updated", ObjectKey: "order", RecordID: "record-1", Summary: "original",
+		Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ObjectKey: "order", RecordID: "record-1", Summary: "original",
 		Actor:    contract.Actor{WorkspaceID: "tenant-a", SubjectID: "actor-a", RoleKey: "member"},
 		Metadata: map[string]any{"result": "completed"}, Before: map[string]any{"status": "pending"}, After: map[string]any{"status": "completed"},
 	}
@@ -152,7 +147,7 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 	mutable.After["status"] = "tampered"
 
 	idempotent := contract.AppendRequest{
-		IdempotencyKey: "request-42", Event: "order.completed", ObjectKey: "order", RecordID: "record-42", Summary: "completed once",
+		IdempotencyKey: "request-42", Family: contract.EventFamilyBusinessEntity, Event: "order.completed", ObjectKey: "order", RecordID: "record-42", Summary: "completed once",
 		Actor: contract.Actor{WorkspaceID: "tenant-a", SubjectID: "actor-a"}, Metadata: map[string]any{"result": "completed"},
 	}
 	first, err := binding.Appender().Append(t.Context(), idempotent)
@@ -169,7 +164,7 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 		t.Fatal("idempotency key reuse with a different event payload was accepted")
 	}
 	if _, err := binding.Appender().Append(t.Context(), contract.AppendRequest{
-		Event: "order.updated", ObjectKey: "order", RecordID: "foreign", Actor: contract.Actor{WorkspaceID: "tenant-b", SubjectID: "actor-b"},
+		Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ObjectKey: "order", RecordID: "foreign", Actor: contract.Actor{WorkspaceID: "tenant-b", SubjectID: "actor-b"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +200,7 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 	createdAt := now.Add(-time.Hour).Format(time.RFC3339)
 	for _, id := range []string{"event-03", "event-01", "event-05", "event-02", "event-04"} {
 		if err := binding.PreparedAppender().AppendPrepared(t.Context(), contract.Event{
-			ID: id, WorkspaceID: "tenant-page", Event: "order.viewed", ActorID: "actor", Metadata: map[string]any{}, CreatedAt: createdAt,
+			ID: id, WorkspaceID: "tenant-page", Family: contract.EventFamilyBusinessEntity, Event: "order.viewed", ActorID: "actor", Metadata: map[string]any{}, CreatedAt: createdAt,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +234,7 @@ func TestIntegrationPublicModuleSharesCallerTransactionCommitAndRollback(t *test
 	}
 	insertHostRecord(t, commitTx, host.dialect, "committed")
 	if _, err := binding.TransactionalAppender().AppendWithin(t.Context(), integrationTransaction{commitTx}, contract.AppendRequest{
-		IdempotencyKey: "committed", Event: "record.created", ObjectKey: "host_record", RecordID: "committed",
+		IdempotencyKey: "committed", Family: contract.EventFamilyBusinessEntity, Event: "record.created", ObjectKey: "host_record", RecordID: "committed",
 		Actor: contract.Actor{WorkspaceID: "tenant-transaction", SubjectID: "actor"},
 	}); err != nil {
 		_ = commitTx.Rollback()
@@ -255,7 +250,7 @@ func TestIntegrationPublicModuleSharesCallerTransactionCommitAndRollback(t *test
 	}
 	insertHostRecord(t, rollbackTx, host.dialect, "rolled-back")
 	rollbackEvent, err := binding.Factory().Build(t.Context(), contract.AppendRequest{
-		IdempotencyKey: "rolled-back", Event: "record.created", ObjectKey: "host_record", RecordID: "rolled-back",
+		IdempotencyKey: "rolled-back", Family: contract.EventFamilyBusinessEntity, Event: "record.created", ObjectKey: "host_record", RecordID: "rolled-back",
 		Actor: contract.Actor{WorkspaceID: "tenant-transaction", SubjectID: "actor"},
 	})
 	if err != nil {
@@ -286,7 +281,7 @@ func TestIntegrationHTTPAdapterEnforcesTenantAndExactActionAuthorization(t *test
 	defer binding.Close(context.Background())
 	for _, workspaceID := range []string{"tenant-a", "tenant-b"} {
 		if _, err := binding.Appender().Append(t.Context(), contract.AppendRequest{
-			Event: "identity.role.changed", ObjectKey: "role", RecordID: workspaceID,
+			Family: contract.EventFamilyIdentityGovernance, Event: "identity.role.changed", ObjectKey: "role", RecordID: workspaceID,
 			Actor: contract.Actor{WorkspaceID: workspaceID, SubjectID: "admin"},
 		}); err != nil {
 			t.Fatal(err)
@@ -333,7 +328,7 @@ func TestIntegrationConcurrentIdempotentAppendConverges(t *testing.T) {
 	defer binding.Close(context.Background())
 
 	request := contract.AppendRequest{
-		IdempotencyKey: "concurrent-request", Event: "invoice.paid", ObjectKey: "invoice", RecordID: "invoice-1", Summary: "paid",
+		IdempotencyKey: "concurrent-request", Family: contract.EventFamilyBusinessEntity, Event: "invoice.paid", ObjectKey: "invoice", RecordID: "invoice-1", Summary: "paid",
 		Actor: contract.Actor{WorkspaceID: "tenant-concurrent", SubjectID: "actor"}, Metadata: map[string]any{"result": "completed"},
 	}
 	const workers = 24
@@ -406,7 +401,7 @@ func openIntegrationDatabase(t *testing.T) (*sql.DB, integrationHost) {
 		t.Fatal(err)
 	}
 	registrar := &integrationMigrationRegistrar{database: database, dialect: dialect}
-	return database, integrationHost{database: database, dialect: dialect, registrar: registrar}
+	return database, integrationHost{database: database, dialect: dialect, registrar: registrar, artifacts: artifactfixture.New()}
 }
 
 func openIntegrationModule(t *testing.T, host integrationHost, clock integrationClock) auditsdk.Binding {

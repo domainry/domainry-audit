@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	auditservice "github.com/domainry/domainry-audit/internal/domain/audit/service"
+	"github.com/domainry/domainry-foundation/requestcontext"
 )
 
 type Store interface {
@@ -26,7 +28,10 @@ func NewService(store Store, clock auditservice.Clock) *Service {
 	return &Service{store: store, factory: auditservice.NewEventFactory(clock)}
 }
 
-func (s *Service) Build(_ context.Context, request contract.AppendRequest) (contract.Event, error) {
+func (s *Service) Build(ctx context.Context, request contract.AppendRequest) (contract.Event, error) {
+	if strings.TrimSpace(request.OperationID) == "" {
+		request.OperationID = requestcontext.OwnerExecutionID(ctx)
+	}
 	return s.factory.Build(request)
 }
 func (s *Service) Append(ctx context.Context, request contract.AppendRequest) (contract.Event, error) {

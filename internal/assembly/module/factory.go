@@ -9,7 +9,6 @@ import (
 
 	auditsdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
-	auditcapability "github.com/domainry/domainry-audit/capability"
 	auditsdkadapter "github.com/domainry/domainry-audit/internal/adapter/auditsdk"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
@@ -25,7 +24,7 @@ type contractClock interface{ Now() time.Time }
 type Factory struct{ options Options }
 
 func OwnedTables() []string {
-	return []string{"_audit_events", "_audit_export_artifacts"}
+	return []string{"_audit_events"}
 }
 
 func SchemaMigrations(dialect modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
@@ -45,25 +44,35 @@ func (f *Factory) OpenModule(ctx context.Context, application auditsdk.Applicati
 	if err := host.Migrations().ApplyOwnedMigrations(ctx, "audit", migrations); err != nil {
 		return nil, fmt.Errorf("apply Audit Module migrations: %w", err)
 	}
-	return f.open(ctx, application, host.Database(), host.Dialect())
+	return f.open(ctx, application, host)
 }
 
-func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef, database modulehost.Database, renderer modulehost.Dialect) (auditsdk.Binding, error) {
+func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef, host modulehost.Host) (auditsdk.Binding, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, fmt.Errorf("audit context unavailable")
 	}
 	if err := application.Validate(); err != nil {
 		return nil, err
 	}
-	events := auditstore.NewStore(database, renderer)
+	events := auditstore.NewStore(host.Database(), host.Dialect())
 	auditService := auditapp.NewService(events, f.options.Clock)
-	exports := exportstore.NewStore(database, renderer)
-	exportService := auditapp.NewExportService(auditService, exports, auditService, f.options.Clock)
-	capability, err := auditcapability.Open(auditcapability.Inputs{})
-	if err != nil {
-		return nil, fmt.Errorf("build Audit capability disclosure: %w", err)
+	var artifacts modulehost.ArtifactHost
+	if available, ok := host.(modulehost.ArtifactHost); ok && available.ArtifactStore() != nil && available.ArtifactContentStore() != nil && available.ArtifactContentWriter() != nil {
+		artifacts = available
 	}
-	binding, err := auditsdkadapter.NewBinding(auditService, exportService, exports, capability, audithttp.AuthorizationActions())
+	var operations modulehost.OperationHost
+	if available, ok := host.(modulehost.OperationHost); ok && available.OperationStore() != nil {
+		operations = available
+	}
+	exportReady := artifacts != nil && operations != nil
+	var exports *exportstore.Store
+	if exportReady {
+		exports = exportstore.NewStore(artifacts.ArtifactStore(), artifacts.ArtifactContentStore(), artifacts.ArtifactContentWriter(), operations.OperationStore())
+	} else {
+		exports = exportstore.NewStore(nil, nil, nil, nil)
+	}
+	exportService := auditapp.NewExportService(auditService, exports, auditService, f.options.Clock)
+	binding, err := auditsdkadapter.NewBinding(auditService, exportService, exports, exportReady, audithttp.AuthorizationActions(exportReady))
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +81,7 @@ func (f *Factory) open(ctx context.Context, application auditsdk.ApplicationRef,
 		if err != nil {
 			return nil, err
 		}
-		adapter, err := audithttp.NewAuditHTTPAdapter(application)
+		adapter, err := audithttp.NewAuditHTTPAdapter(application, exportReady)
 		if err != nil {
 			return nil, err
 		}

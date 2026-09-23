@@ -21,6 +21,7 @@ func auditEventQuery(r *http.Request) contract.Query {
 		ObjectKey: strings.TrimSpace(values.Get("object_key")), RecordID: strings.TrimSpace(values.Get("record_id")),
 		Event: strings.TrimSpace(values.Get("event")), ActorID: strings.TrimSpace(values.Get("actor_id")),
 		RoleKey: strings.TrimSpace(values.Get("role_key")), RequestID: strings.TrimSpace(values.Get("request_id")),
+		OperationID: strings.TrimSpace(values.Get("operation_id")), CausationID: strings.TrimSpace(values.Get("causation_id")), OwnerRunID: strings.TrimSpace(values.Get("owner_run_id")),
 		CreatedFrom: strings.TrimSpace(values.Get("created_from")), CreatedTo: strings.TrimSpace(values.Get("created_to")),
 		Limit: pageSize, Cursor: strings.TrimSpace(values.Get("cursor")),
 	}

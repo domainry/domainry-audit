@@ -3,6 +3,7 @@ package auditstore
 import (
 	"context"
 	"database/sql"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,7 +12,6 @@ import (
 	auditpersistence "github.com/domainry/domainry-audit/internal/infrastructure/persistence"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
-	"github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 
@@ -78,18 +78,45 @@ func TestListWithinOrganizationScopeFailsClosedWithoutActorOrganizationEvidence(
 	}
 }
 
-func TestIdempotentReplayAcceptsPreScopeMigrationNullActorOrganization(t *testing.T) {
+func TestIdempotentReplayAcceptsMissingOptionalActorOrganization(t *testing.T) {
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
-	event := contract.Event{ID: "legacy", WorkspaceID: "workspace", Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z"}
+	event := contract.Event{ID: "without-org", WorkspaceID: "workspace", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z"}
 	if err := store.AppendPrepared(t.Context(), event); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), `UPDATE _audit_events SET actor_org_id = NULL WHERE workspace_id = 'workspace' AND id = 'legacy'`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `UPDATE _audit_events SET actor_org_id = NULL WHERE workspace_id = 'workspace' AND id = 'without-org'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.AppendPrepared(t.Context(), event); err != nil {
-		t.Fatalf("legacy null actor organization broke exact replay: %v", err)
+		t.Fatalf("missing optional actor organization broke exact replay: %v", err)
+	}
+}
+
+func TestCorrelationIdentitiesPersistFilterAndParticipateInExactReplay(t *testing.T) {
+	database, renderer := openAuditStoreTestDatabase(t)
+	store := NewStore(database, renderer)
+	event := contract.Event{
+		ID: "correlated", WorkspaceID: "workspace", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1",
+		Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z",
+	}
+	if err := store.AppendPrepared(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	for name, queryValue := range map[string]contract.Query{
+		"operation": {OperationID: "operation-1"},
+		"causation": {CausationID: "cause-1"},
+		"owner run": {OwnerRunID: "workflow-1"},
+	} {
+		events, err := store.List(t.Context(), "workspace", queryValue)
+		if err != nil || len(events) != 1 || events[0].ID != event.ID || events[0].OperationID != event.OperationID || events[0].CausationID != event.CausationID || events[0].OwnerRunID != event.OwnerRunID {
+			t.Fatalf("%s filter events=%#v err=%v", name, events, err)
+		}
+	}
+	conflict := event
+	conflict.OperationID = "operation-2"
+	if err := store.AppendPrepared(t.Context(), conflict); err == nil {
+		t.Fatal("changed operation identity was accepted as an exact replay")
 	}
 }
 
@@ -114,11 +141,11 @@ func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
 	events := []contract.Event{
-		{ID: "auth-exact", WorkspaceID: "workspace", Event: "auth", ObjectKey: "session", CreatedAt: "2026-09-03T00:00:01Z"},
-		{ID: "auth-prefix", WorkspaceID: "workspace", Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
-		{ID: "authentication-prefix", WorkspaceID: "workspace", Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
-		{ID: "oauth-governance", WorkspaceID: "workspace", Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
-		{ID: "export-conflict", WorkspaceID: "workspace", Event: "audit_export_conflict", ObjectKey: "audit_events", CreatedAt: "2026-09-03T00:00:05Z"},
+		{ID: "auth-exact", WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth", ObjectKey: "session", CreatedAt: "2026-09-03T00:00:01Z"},
+		{ID: "auth-prefix", WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
+		{ID: "authentication-prefix", WorkspaceID: "workspace", Family: contract.EventFamilyIdentitySecurity, Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
+		{ID: "oauth-governance", WorkspaceID: "workspace", Family: contract.EventFamilyIdentityGovernance, Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
+		{ID: "export-conflict", WorkspaceID: "workspace", Family: contract.EventFamilyAuditExport, Event: "audit_export_conflict", ObjectKey: "audit_events", Metadata: map[string]any{"artifact_id": "artifact", "result": "conflict", "reason": "fingerprint"}, CreatedAt: "2026-09-03T00:00:05Z"},
 	}
 	for _, event := range events {
 		if err := store.AppendPrepared(t.Context(), event); err != nil {
@@ -139,30 +166,10 @@ func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
 	assertAuditStoreEventIDs(t, governance, "oauth-governance")
 }
 
-func TestOperationsClassPredicateRendersExportConflictForEveryDialect(t *testing.T) {
-	for _, driver := range []string{"sqlite", "postgres", "mysql"} {
-		t.Run(driver, func(t *testing.T) {
-			renderer, err := ormdialect.ParseRenderer(driver, "audit_scope", "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			statement, arguments, err := query.NewSelectBuilder(renderer, "_audit_events").
-				Columns("id").
-				Where(auditOperationsClassPredicate(auditEventClassExpression())).
-				Build()
-			if err != nil || strings.TrimSpace(statement) == "" {
-				t.Fatalf("statement=%q err=%v", statement, err)
-			}
-			found := false
-			for _, argument := range arguments {
-				if argument == "audit_export_conflict" {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("audit_export_conflict is absent from %s operations predicate: statement=%s args=%v", driver, statement, arguments)
-			}
-		})
+func TestOperationsClassUsesRegisteredFamilies(t *testing.T) {
+	families := contract.EventFamiliesForClass(contract.EventClassOperations)
+	if !slices.Contains(families, contract.EventFamilyAuditExport) || !slices.Contains(families, contract.EventFamilyRuntimeSecurity) {
+		t.Fatalf("operations families=%v", families)
 	}
 }
 
@@ -198,7 +205,7 @@ func appendAuditStoreTestEvent(t *testing.T, store *Store, id, workspaceID, acto
 	if actorOrgID != "" {
 		metadata["actor_org_id"] = actorOrgID
 	}
-	if err := store.AppendPrepared(t.Context(), contract.Event{ID: id, WorkspaceID: workspaceID, Event: "order.updated", ActorID: actorID, Metadata: metadata, CreatedAt: "2026-09-03T00:00:00Z"}); err != nil {
+	if err := store.AppendPrepared(t.Context(), contract.Event{ID: id, WorkspaceID: workspaceID, Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: actorID, Metadata: metadata, CreatedAt: "2026-09-03T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
 }

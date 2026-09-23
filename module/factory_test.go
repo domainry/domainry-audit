@@ -15,8 +15,11 @@ import (
 	auditsdk "github.com/domainry/domainry-audit-sdk"
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+	"github.com/domainry/domainry-audit/internal/testsupport/artifactfixture"
 	actioncontract "github.com/domainry/domainry-foundation/action"
+	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	sharedoperation "github.com/domainry/domainry-foundation/operation"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
@@ -28,8 +31,9 @@ type fixedClock struct{ value time.Time }
 func (c fixedClock) Now() time.Time { return c.value }
 
 type testHost struct {
-	database modulehost.Database
-	dialect  modulehost.Dialect
+	database  modulehost.Database
+	dialect   modulehost.Dialect
+	artifacts *artifactfixture.Store
 }
 
 func newTestHost(t *testing.T, db *sql.DB) testHost {
@@ -38,11 +42,15 @@ func newTestHost(t *testing.T, db *sql.DB) testHost {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testHost{database: db, dialect: dialect}
+	return testHost{database: db, dialect: dialect, artifacts: artifactfixture.New()}
 }
-func (h testHost) Database() modulehost.Database             { return h.database }
-func (h testHost) Dialect() modulehost.Dialect               { return h.dialect }
-func (h testHost) Migrations() modulehost.MigrationRegistrar { return testMigrationRegistrar{host: h} }
+func (h testHost) Database() modulehost.Database                       { return h.database }
+func (h testHost) Dialect() modulehost.Dialect                         { return h.dialect }
+func (h testHost) Migrations() modulehost.MigrationRegistrar           { return testMigrationRegistrar{host: h} }
+func (h testHost) ArtifactStore() sharedartifact.ManagedStore          { return h.artifacts }
+func (h testHost) ArtifactContentStore() sharedartifact.ContentStore   { return h.artifacts }
+func (h testHost) ArtifactContentWriter() sharedartifact.ContentWriter { return h.artifacts }
+func (h testHost) OperationStore() sharedoperation.Store               { return h.artifacts }
 
 type testMigrationRegistrar struct{ host testHost }
 
@@ -54,6 +62,25 @@ func (r testMigrationRegistrar) ApplyOwnedMigrations(ctx context.Context, _ stri
 		return err
 	}
 	return runner.Apply(ctx, migrations)
+}
+
+// artifactOnlyHost proves that Artifact storage alone cannot advertise a
+// business export whose command receipt would be missing from _operations.
+type artifactOnlyHost struct {
+	database  modulehost.Database
+	dialect   modulehost.Dialect
+	artifacts *artifactfixture.Store
+}
+
+func (h artifactOnlyHost) Database() modulehost.Database { return h.database }
+func (h artifactOnlyHost) Dialect() modulehost.Dialect   { return h.dialect }
+func (h artifactOnlyHost) Migrations() modulehost.MigrationRegistrar {
+	return testMigrationRegistrar{host: testHost{database: h.database, dialect: h.dialect}}
+}
+func (h artifactOnlyHost) ArtifactStore() sharedartifact.ManagedStore        { return h.artifacts }
+func (h artifactOnlyHost) ArtifactContentStore() sharedartifact.ContentStore { return h.artifacts }
+func (h artifactOnlyHost) ArtifactContentWriter() sharedartifact.ContentWriter {
+	return h.artifacts
 }
 
 type testTransaction struct{ *sql.Tx }
@@ -91,18 +118,34 @@ func TestModuleUsesBorrowedHostDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Event: "record.updated", ObjectKey: "record", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}}); err != nil {
+	if _, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Family: contract.EventFamilyBusinessEntity, Event: "record.updated", ObjectKey: "record", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}}); err != nil {
 		t.Fatal(err)
 	}
 	var count int
 	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM _audit_events`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM _audit_export_artifacts`).Scan(&count); err != nil {
-		t.Fatalf("neutral Audit export artifact table is missing: %v", err)
+	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM _audit_export_artifacts`).Scan(&count); err == nil {
+		t.Fatal("private Audit export artifact table must not be created")
 	}
-	if err = db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM business__audit_export_artifacts`).Scan(&count); err == nil {
-		t.Fatal("legacy Runtime-specific Audit export table must not be created")
+}
+
+func TestBusinessExportRequiresSharedOperationAndArtifactPorts(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	base := newTestHost(t, db)
+	binding, err := NewFactory(Options{}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, artifactOnlyHost{
+		database: base.database, dialect: base.dialect, artifacts: base.artifacts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close(context.Background())
+	if binding.Descriptor().Capabilities.Export {
+		t.Fatal("Artifact-only Audit host advertised export without a shared Operation receipt store")
 	}
 }
 
@@ -138,7 +181,7 @@ func TestTransactionalAppendClassificationReplayAndSubjectLifecycle(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := contract.AppendRequest{Event: "identity.role.changed", ObjectKey: "role", IdempotencyKey: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}}
+	request := contract.AppendRequest{Family: contract.EventFamilyIdentityGovernance, Event: "identity.role.changed", ObjectKey: "role", IdempotencyKey: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}}
 	if _, err = binding.TransactionalAppender().AppendWithin(t.Context(), testTransaction{tx}, request); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +219,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user", RoleKey: "member", RequestID: "source-request"}, Metadata: map[string]any{"result": "completed", "reason": "order_fulfilled"}})
+	_, err = binding.Appender().Append(t.Context(), contract.AppendRequest{Family: contract.EventFamilyBusinessEntity, Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user", RoleKey: "member", RequestID: "source-request"}, Metadata: map[string]any{"result": "completed", "reason": "order_fulfilled"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +296,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	}
 }
 
-func TestModuleOwnsAuditProductHTTPAdapterAndOpenAPI(t *testing.T) {
+func TestModuleOwnsAuditProductHTTPAdapter(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -285,8 +328,8 @@ func TestModuleOwnsAuditProductHTTPAdapterAndOpenAPI(t *testing.T) {
 	if err := modulehttp.ValidateAdapter(adapter); err != nil {
 		t.Fatal(err)
 	}
-	if len(adapter.Routes()) != 7 || len(adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()) != 7 {
-		t.Fatalf("routes=%d OpenAPI=%d", len(adapter.Routes()), len(adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()))
+	if len(adapter.Routes()) != 7 {
+		t.Fatalf("routes=%d", len(adapter.Routes()))
 	}
 	expectedRoutes := map[string]struct {
 		permission string
@@ -300,18 +343,11 @@ func TestModuleOwnsAuditProductHTTPAdapterAndOpenAPI(t *testing.T) {
 		"GET /audit/system/events":             {"audit.ops.read", "operations_audit_read"},
 		"GET /audit/system/events/export":      {"audit.ops.export", "operations_audit_export"},
 	}
-	operations := adapter.(modulehttp.OpenAPIProvider).OpenAPIOperations()
-	if method := operations["GET /audit/events"]["x-domainry-runtime-client-method"]; method != "listBusinessAuditEventPage" {
-		t.Fatalf("business Audit Runtime client method=%v", method)
-	}
 	for _, route := range adapter.Routes() {
 		pattern := route.Pattern()
 		expected, ok := expectedRoutes[pattern]
 		if !ok || route.Action.Authorization.Strategy != actioncontract.AuthorizationAuthenticated || route.Action.Permission == nil || route.Action.Permission.Key != expected.permission || route.Action.AuditClass != expected.auditClass {
 			t.Fatalf("unexpected Audit route contract: %#v", route)
-		}
-		if operations[pattern] == nil {
-			t.Fatalf("Audit route %q has no owner OpenAPI operation", pattern)
 		}
 		delete(expectedRoutes, pattern)
 	}
@@ -327,7 +363,7 @@ func TestModuleOwnsAuditProductHTTPAdapterAndOpenAPI(t *testing.T) {
 	}
 
 	_, err = binding.Appender().Append(t.Context(), contract.AppendRequest{
-		Event: "order.completed", ObjectKey: "order", RecordID: "one",
+		Family: contract.EventFamilyBusinessEntity, Event: "order.completed", ObjectKey: "order", RecordID: "one",
 		Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user", RoleKey: "member"}, Summary: "completed",
 	})
 	if err != nil {
@@ -371,10 +407,10 @@ func TestAuditHTTPAdapterKeepsExactPermissionDataScopesIndependent(t *testing.T)
 		t.Fatal(err)
 	}
 	for _, event := range []contract.AppendRequest{
-		{Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
-		{Event: "order.completed", ObjectKey: "order", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
-		{Event: "identity.role.changed", ObjectKey: "role", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
-		{Event: "identity.role.changed", ObjectKey: "role", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
+		{Family: contract.EventFamilyBusinessEntity, Event: "order.completed", ObjectKey: "order", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
+		{Family: contract.EventFamilyBusinessEntity, Event: "order.completed", ObjectKey: "order", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
+		{Family: contract.EventFamilyIdentityGovernance, Event: "identity.role.changed", ObjectKey: "role", RecordID: "one", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}},
+		{Family: contract.EventFamilyIdentityGovernance, Event: "identity.role.changed", ObjectKey: "role", RecordID: "two", Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "other"}},
 	} {
 		if _, err := binding.Appender().Append(t.Context(), event); err != nil {
 			t.Fatal(err)

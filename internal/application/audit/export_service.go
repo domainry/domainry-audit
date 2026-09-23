@@ -156,7 +156,8 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 		return nil, "", exportError("export_requester_mismatch", nil)
 	}
 	expiresAt, parseErr := time.Parse(time.RFC3339Nano, a.ExpiresAt)
-	if parseErr != nil || !s.clock.Now().UTC().Before(expiresAt) {
+	now := s.clock.Now().UTC()
+	if parseErr != nil || !now.Before(expiresAt) {
 		return nil, "", exportError("export_download_expired", nil)
 	}
 	if exportAuthorizationHash(principal) != a.AuthorizationScopeSHA256 {
@@ -167,10 +168,20 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 			return nil, "", err
 		}
 	}
-	if exportBytesHash(a.Content) != a.ContentSHA256 || exportHash(a.Filters) != a.ScopeSHA256 {
+	content, found, err := s.store.ExportContentWithinDataScope(ctx, a.WorkspaceID, a.ID, exportHash(token), principal.UserID, now, scope)
+	if err != nil {
+		if errors.Is(err, auditrepository.ErrExportContentIntegrity) {
+			return nil, "", exportError("export_integrity_failed", err)
+		}
+		return nil, "", exportError("export_persistence_failed", err)
+	}
+	if !found {
+		return nil, "", exportError("export_download_not_found", nil)
+	}
+	if exportBytesHash(content) != a.ContentSHA256 || exportHash(a.Filters) != a.ScopeSHA256 {
 		return nil, "", exportError("export_integrity_failed", nil)
 	}
-	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ID, principal.UserID, s.clock.Now().UTC().Format(time.RFC3339Nano), scope)
+	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ID, principal.UserID, now.Format(time.RFC3339Nano), scope)
 	if err != nil {
 		return nil, "", exportError("export_persistence_failed", err)
 	}
@@ -179,7 +190,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 			return nil, "", err
 		}
 	}
-	return append([]byte(nil), a.Content...), a.Filename, nil
+	return append([]byte(nil), content...), a.Filename, nil
 }
 
 func encodeExportCSV(rows [][]string) ([]byte, error) {
@@ -227,7 +238,7 @@ func (s *ExportService) appendExportAudit(ctx context.Context, event string, p c
 	for k, v := range extra {
 		metadata[k] = v
 	}
-	_, err := s.appender.Append(ctx, contract.AppendRequest{Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
+	_, err := s.appender.Append(ctx, contract.AppendRequest{Family: contract.EventFamilyAuditExport, Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
 	if err != nil {
 		return exportError("export_audit_failed", err)
 	}
@@ -241,6 +252,7 @@ func (s *ExportService) appendExportConflictAudit(ctx context.Context, p contrac
 	}
 	_, err := s.appender.Append(ctx, contract.AppendRequest{
 		IdempotencyKey: idempotencyKey,
+		Family:         contract.EventFamilyAuditExport,
 		Event:          "audit_export_conflict",
 		ObjectKey:      "audit_events",
 		RecordID:       artifactID,

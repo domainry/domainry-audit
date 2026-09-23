@@ -31,8 +31,9 @@ type QueryPlan struct {
 }
 
 type QueryEvent struct {
-	ID, Event, ObjectKey, RecordID, ActorID, RoleKey, RequestID, Result, Reason, Summary, CreatedAt string
-	Metadata, Before, After                                                                         map[string]any
+	ID, Event, ObjectKey, RecordID, ActorID, RoleKey, RequestID              string
+	OperationID, CausationID, OwnerRunID, Result, Reason, Summary, CreatedAt string
+	Metadata, Before, After                                                  map[string]any
 }
 
 type QueryResult struct {
@@ -98,6 +99,7 @@ func ProjectQuery(events []contract.Event, plan QueryPlan) QueryResult {
 		item := QueryEvent{
 			ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
 			ActorID: event.ActorID, RoleKey: event.RoleKey, RequestID: AuditEventRequestID(projected),
+			OperationID: event.OperationID, CausationID: event.CausationID, OwnerRunID: event.OwnerRunID,
 			Result: ExportEventResult(projected), Reason: ExportEventReason(projected),
 			Summary: event.Summary, CreatedAt: event.CreatedAt,
 			Metadata: metadata, Before: secrets.RedactMap(event.Before), After: secrets.RedactMap(event.After),

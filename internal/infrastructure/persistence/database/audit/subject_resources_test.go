@@ -15,7 +15,7 @@ func TestSubjectErasureClearsHistoricalSnapshotsForDeclaredResources(t *testing.
 		{"other", "workspace", "administrator", "member-other"},
 		{"workspace", "other-workspace", "subject", "member-one"},
 	} {
-		event := contract.Event{ID: item.id, WorkspaceID: item.workspace, Event: "member.updated", ObjectKey: "member", RecordID: item.record, ActorID: item.actor, Summary: "PRIVATE NAME", Metadata: map[string]any{"email": "private@example.test"}, Before: map[string]any{"phone": "PRIVATE PHONE"}, After: map[string]any{"name": "PRIVATE NAME"}, CreatedAt: "2026-09-14T00:00:00Z"}
+		event := contract.Event{ID: item.id, WorkspaceID: item.workspace, Family: contract.EventFamilyBusinessEntity, Event: "member.updated", ObjectKey: "member", RecordID: item.record, ActorID: item.actor, Summary: "PRIVATE NAME", Metadata: map[string]any{"email": "private@example.test"}, Before: map[string]any{"phone": "PRIVATE PHONE"}, After: map[string]any{"name": "PRIVATE NAME"}, CreatedAt: "2026-09-14T00:00:00Z"}
 		if err := store.AppendPrepared(t.Context(), event); err != nil {
 			t.Fatal(err)
 		}

@@ -45,10 +45,7 @@ func (s *Store) AppendPreparedWithin(ctx context.Context, tx contract.Transactio
 }
 
 func validatePrepared(event contract.Event) error {
-	if strings.TrimSpace(event.WorkspaceID) == "" {
-		return fmt.Errorf("prepared audit event is incomplete")
-	}
-	return nil
+	return contract.ValidatePreparedEvent(event)
 }
 
 type eventExecutor interface {
@@ -96,21 +93,21 @@ func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.E
 		return fmt.Errorf("encode audit after: %w", err)
 	}
 	actorOrgID := eventActorOrgID(event)
-	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "event", "object_key", "record_id", "actor_id", "actor_org_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, actorOrgID, event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
+	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Family, event.Event, event.ObjectKey, event.RecordID, event.ActorID, nullableIdentity(actorOrgID), nullableIdentity(event.OperationID), nullableIdentity(event.CausationID), nullableIdentity(event.OwnerRunID), event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
 	if err != nil {
 		return err
 	}
 	if _, err = exec.ExecContext(ctx, queryValue, args...); err != nil {
 		lookup, lookupArgs, buildErr := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).
-			Columns("event", "object_key", "record_id", "actor_id", "actor_org_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
+			Columns("family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
 			Where(query.Equal("id", event.ID)).Limit(1).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build audit event replay lookup: %w", buildErr)
 		}
-		var storedEvent, objectKey, recordID, actorID, roleKey, summary, storedMetadata, storedBefore, storedAfter string
-		var storedActorOrgID sql.NullString
-		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&storedEvent, &objectKey, &recordID, &actorID, &storedActorOrgID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter)
-		if lookupErr == nil && storedEvent == event.Event && objectKey == event.ObjectKey && recordID == event.RecordID && actorID == event.ActorID && storedActorOrgID.String == actorOrgID && roleKey == event.RoleKey && summary == event.Summary && storedMetadata == string(metadata) && storedBefore == string(before) && storedAfter == string(after) {
+		var storedFamily, storedEvent, objectKey, recordID, actorID, roleKey, summary, storedMetadata, storedBefore, storedAfter string
+		var storedActorOrgID, storedOperationID, storedCausationID, storedOwnerRunID sql.NullString
+		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&storedFamily, &storedEvent, &objectKey, &recordID, &actorID, &storedActorOrgID, &storedOperationID, &storedCausationID, &storedOwnerRunID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter)
+		if lookupErr == nil && storedFamily == event.Family && storedEvent == event.Event && objectKey == event.ObjectKey && recordID == event.RecordID && actorID == event.ActorID && storedActorOrgID.String == actorOrgID && storedOperationID.String == strings.TrimSpace(event.OperationID) && storedCausationID.String == strings.TrimSpace(event.CausationID) && storedOwnerRunID.String == strings.TrimSpace(event.OwnerRunID) && roleKey == event.RoleKey && summary == event.Summary && storedMetadata == string(metadata) && storedBefore == string(before) && storedAfter == string(after) {
 			return nil
 		}
 		return fmt.Errorf("insert audit event: %w", err)
@@ -155,18 +152,20 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	addEqual("event", queryValue.Event)
 	addEqual("actor_id", queryValue.ActorID)
 	addEqual("role_key", queryValue.RoleKey)
-	eventClassValue := auditEventClassExpression()
-	switch strings.TrimSpace(queryValue.Class) {
-	case contract.EventClassOperations:
-		predicates = append(predicates, auditOperationsClassPredicate(eventClassValue))
-	case contract.EventClassGovernance:
-		operations := auditOperationsClassPredicate(eventClassValue)
-		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
-		predicates = append(predicates, query.And(query.Not(operations), governance))
-	case contract.EventClassBusiness:
-		operations := auditOperationsClassPredicate(eventClassValue)
-		governance := auditClassMarkerPredicate(eventClassValue, contract.EventClassMarkers(contract.EventClassGovernance))
-		predicates = append(predicates, query.And(query.Not(operations), query.Not(governance)))
+	addEqual("operation_id", queryValue.OperationID)
+	addEqual("causation_id", queryValue.CausationID)
+	addEqual("owner_run_id", queryValue.OwnerRunID)
+	if class := strings.TrimSpace(queryValue.Class); class != "" {
+		families := contract.EventFamiliesForClass(class)
+		if len(families) == 0 {
+			predicates = append(predicates, query.AlwaysFalse())
+		} else {
+			values := make([]any, len(families))
+			for index := range families {
+				values[index] = families[index]
+			}
+			predicates = append(predicates, query.In("family", values...))
+		}
 	}
 	if value := strings.TrimSpace(queryValue.CreatedFrom); value != "" {
 		predicates = append(predicates, query.GreaterThanOrEqual("created_at", value))
@@ -194,7 +193,7 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	} else {
 		b = query.NewSelectBuilder(s.renderer, "_audit_events")
 	}
-	b.Columns("id", "workspace_id", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit)
+	b.Columns("id", "workspace_id", "operation_id", "causation_id", "owner_run_id", "family", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit)
 	if len(predicates) > 0 {
 		b.Where(query.And(predicates...))
 	}
@@ -211,9 +210,11 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	for rows.Next() {
 		var e contract.Event
 		var metadata, before, after, created string
-		if err := rows.Scan(&e.ID, &e.WorkspaceID, &e.Event, &e.ObjectKey, &e.RecordID, &e.ActorID, &e.RoleKey, &e.Summary, &metadata, &before, &after, &created); err != nil {
+		var operationID, causationID, ownerRunID sql.NullString
+		if err := rows.Scan(&e.ID, &e.WorkspaceID, &operationID, &causationID, &ownerRunID, &e.Family, &e.Event, &e.ObjectKey, &e.RecordID, &e.ActorID, &e.RoleKey, &e.Summary, &metadata, &before, &after, &created); err != nil {
 			return nil, err
 		}
+		e.OperationID, e.CausationID, e.OwnerRunID = operationID.String, causationID.String, ownerRunID.String
 		_ = json.Unmarshal([]byte(metadata), &e.Metadata)
 		_ = json.Unmarshal([]byte(before), &e.Before)
 		_ = json.Unmarshal([]byte(after), &e.After)
@@ -226,6 +227,13 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 func eventActorOrgID(event contract.Event) string {
 	value, _ := event.Metadata["actor_org_id"].(string)
 	return strings.TrimSpace(value)
+}
+
+func nullableIdentity(value string) any {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return nil
 }
 
 func auditEventDataScopePredicate(scope auditrepository.DataScope) query.Predicate {
@@ -313,36 +321,4 @@ func escapeSQLLike(value string) string {
 	value = strings.ReplaceAll(value, "~", "~~")
 	value = strings.ReplaceAll(value, "%", "~%")
 	return strings.ReplaceAll(value, "_", "~_")
-}
-
-func auditEventClassExpression() query.Expression {
-	return query.Lower(query.Concat(
-		query.Coalesce(query.Column("event"), query.Value("")),
-		query.Value(" "),
-		query.Coalesce(query.Column("object_key"), query.Value("")),
-	))
-}
-
-func auditClassMarkerPredicate(value query.Expression, markers []string) query.Predicate {
-	predicates := make([]query.Predicate, 0, len(markers))
-	for _, marker := range markers {
-		predicates = append(predicates, query.LikeValueEscaped(value, "%"+escapeSQLLike(strings.ToLower(marker))+"%"))
-	}
-	if len(predicates) == 0 {
-		return query.AlwaysFalse()
-	}
-	return query.Or(predicates...)
-}
-
-func auditOperationsClassPredicate(value query.Expression) query.Predicate {
-	event := query.Lower(query.Coalesce(query.Column("event"), query.Value("")))
-	return query.Or(
-		query.EqualValue(event, "auth"),
-		query.LikeValueEscaped(event, escapeSQLLike("auth_")+"%"),
-		query.LikeValueEscaped(event, escapeSQLLike("auth.")+"%"),
-		query.LikeValueEscaped(event, escapeSQLLike("authentication_")+"%"),
-		query.LikeValueEscaped(event, escapeSQLLike("authentication.")+"%"),
-		query.EqualValue(event, "audit_export_conflict"),
-		auditClassMarkerPredicate(value, contract.EventClassMarkers(contract.EventClassOperations)),
-	)
 }

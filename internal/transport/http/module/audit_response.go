@@ -13,20 +13,23 @@ import (
 )
 
 type auditEventResponse struct {
-	ID        string         `json:"id"`
-	Event     string         `json:"event"`
-	ObjectKey string         `json:"object_key,omitempty"`
-	RecordID  string         `json:"record_id,omitempty"`
-	ActorID   string         `json:"actor_id"`
-	RoleKey   string         `json:"role_key"`
-	RequestID string         `json:"request_id"`
-	Result    string         `json:"result"`
-	Reason    string         `json:"reason"`
-	Summary   string         `json:"summary"`
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	Before    map[string]any `json:"before,omitempty"`
-	After     map[string]any `json:"after,omitempty"`
-	CreatedAt string         `json:"created_at"`
+	ID          string         `json:"id"`
+	Event       string         `json:"event"`
+	ObjectKey   string         `json:"object_key,omitempty"`
+	RecordID    string         `json:"record_id,omitempty"`
+	ActorID     string         `json:"actor_id"`
+	RoleKey     string         `json:"role_key"`
+	RequestID   string         `json:"request_id"`
+	OperationID string         `json:"operation_id,omitempty"`
+	CausationID string         `json:"causation_id,omitempty"`
+	OwnerRunID  string         `json:"owner_run_id,omitempty"`
+	Result      string         `json:"result"`
+	Reason      string         `json:"reason"`
+	Summary     string         `json:"summary"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	Before      map[string]any `json:"before,omitempty"`
+	After       map[string]any `json:"after,omitempty"`
+	CreatedAt   string         `json:"created_at"`
 }
 
 type auditPageResponse[T any] struct {
@@ -57,6 +60,7 @@ func auditEventPageResponse(result auditapp.AuditQueryResult) auditPageResponse[
 		items = append(items, auditEventResponse{
 			ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
 			ActorID: event.ActorID, RoleKey: event.RoleKey, RequestID: event.RequestID, Result: event.Result, Reason: event.Reason,
+			OperationID: event.OperationID, CausationID: event.CausationID, OwnerRunID: event.OwnerRunID,
 			Summary: event.Summary, Metadata: event.Metadata, Before: event.Before, After: event.After, CreatedAt: event.CreatedAt,
 		})
 	}

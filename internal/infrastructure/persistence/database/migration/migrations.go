@@ -32,21 +32,19 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
 	}
-	exportTable, _, err := ormschema.NewTable(renderer, "_audit_export_artifacts").Columns(exportColumns()...).PrimaryKey("workspace_id", "id").Build()
-	if err != nil {
-		return nil, fmt.Errorf("build Audit table _audit_export_artifacts: %w", err)
-	}
-	exportStatements := []string{exportTable}
+	indexStatements := []string{}
 	indexes := []struct {
 		table, name string
 		unique      bool
 		columns     []string
 	}{
+		{"_audit_events", "idx_audit_event_cursor", false, []string{"workspace_id", "created_at", "id"}},
 		{"_audit_events", "idx_audit_event_actor_cursor", false, []string{"workspace_id", "actor_id", "created_at", "id"}},
+		{"_audit_events", "idx_audit_event_actor_org_cursor", false, []string{"workspace_id", "actor_org_id", "created_at", "id"}},
 		{"_audit_events", "idx_audit_event_record_cursor", false, []string{"workspace_id", "object_key", "record_id", "created_at", "id"}},
-		{"_audit_export_artifacts", "uniq_audit_export_idempotency", true, []string{"workspace_id", "requester_user_id", "idempotency_key"}},
-		{"_audit_export_artifacts", "uniq_audit_export_token_hash", true, []string{"workspace_id", "token_sha256"}},
-		{"_audit_export_artifacts", "idx_audit_export_expiry", false, []string{"workspace_id", "expires_at"}},
+		{"_audit_events", "idx_audit_event_operation_cursor", false, []string{"workspace_id", "operation_id", "created_at", "id"}},
+		{"_audit_events", "idx_audit_event_causation_cursor", false, []string{"workspace_id", "causation_id", "created_at", "id"}},
+		{"_audit_events", "idx_audit_event_owner_run_cursor", false, []string{"workspace_id", "owner_run_id", "created_at", "id"}},
 	}
 	for _, index := range indexes {
 		columns := index.columns
@@ -63,24 +61,15 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 		if err != nil {
 			return nil, fmt.Errorf("build Audit index %s: %w", index.name, err)
 		}
-		exportStatements = append(exportStatements, statement)
+		indexStatements = append(indexStatements, statement)
 	}
 	baseline, err := schemaBaseline(profile)
 	if err != nil {
 		return nil, err
 	}
-	actorOrgColumn, _, err := ormschema.NewAddColumn(renderer, "_audit_events", ormschema.Column("actor_org_id", ormschema.TextKey(191))).Build()
-	if err != nil {
-		return nil, fmt.Errorf("build Audit actor organization column: %w", err)
-	}
-	actorOrgIndex, _, err := ormschema.NewIndex(renderer, "idx_audit_event_actor_org_cursor", "_audit_events").Columns("workspace_id", "actor_org_id", "created_at", "id").Build()
-	if err != nil {
-		return nil, fmt.Errorf("build Audit actor organization index: %w", err)
-	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "audit_events", Statements: []string{eventTable}, Baseline: &baseline},
-		{Version: 2, Name: "audit_exports_and_indexes", Statements: exportStatements},
-		{Version: 3, Name: "audit_event_actor_organization_scope", Statements: []string{actorOrgColumn, actorOrgIndex}},
+		{Version: 2, Name: "audit_indexes", Statements: indexStatements},
 	}, nil
 }
 
@@ -90,8 +79,9 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 		kind              ColumnKind
 		nullable, primary bool
 	}{
-		{"id", Key191, false, true}, {"workspace_id", Key191, false, true}, {"event", Key191, false, false},
-		{"object_key", Key191, true, false}, {"record_id", Key191, true, false}, {"actor_id", Key191, true, false},
+		{"id", Key191, false, true}, {"workspace_id", Key191, false, true}, {"family", Key191, false, false}, {"event", Key191, false, false},
+		{"object_key", Key191, true, false}, {"record_id", Key191, true, false}, {"actor_id", Key191, true, false}, {"actor_org_id", Key191, true, false},
+		{"operation_id", Key191, true, false}, {"causation_id", Key191, true, false}, {"owner_run_id", Key191, true, false},
 		{"role_key", Key191, true, false}, {"summary", Long, true, false}, {"metadata_json", JSON, false, false},
 		{"before_json", JSON, false, false}, {"after_json", JSON, false, false}, {"created_at", Key40, false, false},
 	}
@@ -108,21 +98,12 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 
 func auditColumns() []ormschema.ColumnDefinition {
 	return []ormschema.ColumnDefinition{
-		required("id", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
+		required("id", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("family", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
 		ormschema.Column("object_key", ormschema.TextKey(191)), ormschema.Column("record_id", ormschema.TextKey(191)),
-		ormschema.Column("actor_id", ormschema.TextKey(191)), ormschema.Column("role_key", ormschema.TextKey(191)), ormschema.Column("summary", ormschema.LongText()),
+		ormschema.Column("actor_id", ormschema.TextKey(191)), ormschema.Column("actor_org_id", ormschema.TextKey(191)),
+		ormschema.Column("operation_id", ormschema.TextKey(191)), ormschema.Column("causation_id", ormschema.TextKey(191)), ormschema.Column("owner_run_id", ormschema.TextKey(191)),
+		ormschema.Column("role_key", ormschema.TextKey(191)), ormschema.Column("summary", ormschema.LongText()),
 		required("metadata_json", ormschema.JSON()), required("before_json", ormschema.JSON()), required("after_json", ormschema.JSON()), required("created_at", ormschema.TextKey(40)),
-	}
-}
-
-func exportColumns() []ormschema.ColumnDefinition {
-	return []ormschema.ColumnDefinition{
-		required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(191)), required("requester_user_id", ormschema.TextKey(191)),
-		required("role_key", ormschema.TextKey(191)), required("idempotency_key", ormschema.TextKey(191)), required("filters_json", ormschema.JSON()),
-		required("scope_sha256", ormschema.TextKey(64)), required("authorization_scope_sha256", ormschema.TextKey(64)), required("token_sha256", ormschema.TextKey(64)),
-		required("filename", ormschema.LongText()), required("content_sha256", ormschema.TextKey(64)), required("row_count", ormschema.BigInt()), required("content_base64", ormschema.LongText()),
-		required("audit_identity", ormschema.LongText()), required("status", ormschema.TextKey(32)), required("created_at", ormschema.TextKey(40)), required("expires_at", ormschema.TextKey(40)),
-		ormschema.Column("download_count", ormschema.BigInt()).NotNull().DefaultValue(0), required("last_downloaded_at", ormschema.TextKey(40)),
 	}
 }
 

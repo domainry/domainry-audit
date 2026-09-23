@@ -12,6 +12,7 @@ func TestEveryAuditResponsePublishesTheSameTraceFields(t *testing.T) {
 	result := auditapp.AuditQueryResult{Items: []auditservice.QueryEvent{{
 		ID: "event-1", Event: "order_failed", ObjectKey: "order", RecordID: "order-1",
 		ActorID: "user-1", RoleKey: "manager", RequestID: "request-1", Result: "failed", Reason: "policy_denied",
+		OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1",
 		Summary: "Order failed", Metadata: map[string]any{"safe": true}, Before: map[string]any{"state": "new"}, After: map[string]any{"state": "failed"}, CreatedAt: "2026-09-12T00:00:00Z",
 	}}}
 	responses := []any{auditBusinessResponse(result), auditGovernanceResponse(result), auditOperationsResponse(result)}
@@ -25,7 +26,7 @@ func TestEveryAuditResponsePublishesTheSameTraceFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		item := body["items"].([]any)[0].(map[string]any)
-		for key, want := range map[string]any{"actor_id": "user-1", "role_key": "manager", "request_id": "request-1", "result": "failed", "reason": "policy_denied"} {
+		for key, want := range map[string]any{"actor_id": "user-1", "role_key": "manager", "request_id": "request-1", "operation_id": "operation-1", "causation_id": "cause-1", "owner_run_id": "workflow-1", "result": "failed", "reason": "policy_denied"} {
 			if item[key] != want {
 				t.Fatalf("response %d %s=%v want=%v", index, key, item[key], want)
 			}

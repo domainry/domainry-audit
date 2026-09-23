@@ -13,7 +13,6 @@ import (
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	exportstore "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/export"
 	actioncontract "github.com/domainry/domainry-foundation/action"
-	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
@@ -21,17 +20,14 @@ type Binding struct {
 	audit       *auditapp.Service
 	exports     *auditapp.ExportService
 	exportStore *exportstore.Store
+	exportReady bool
 	mu          sync.RWMutex
 	bindHost    func(modulehost.AuditApplicationHost) ([]modulehttp.Adapter, error)
 	adapters    []modulehttp.Adapter
 	actions     []actioncontract.ActionDefinition
-	capability  modulecapability.Binding
 }
 
-func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store, capability modulecapability.Binding, actions []actioncontract.ActionDefinition) (*Binding, error) {
-	if capability == nil {
-		return nil, fmt.Errorf("Audit capability binding is required")
-	}
+func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, exportStore *exportstore.Store, exportReady bool, actions []actioncontract.ActionDefinition) (*Binding, error) {
 	if len(actions) == 0 {
 		return nil, fmt.Errorf("Audit authorization Actions are required")
 	}
@@ -39,21 +35,11 @@ func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, export
 	for index := range actions {
 		detached[index] = actioncontract.CloneDefinition(actions[index])
 	}
-	return &Binding{audit: audit, exports: exports, exportStore: exportStore, capability: capability, actions: detached}, nil
-}
-
-func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
-	return b.capability.CapabilitySummary(ctx)
-}
-func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
-	return b.capability.CapabilityCategory(ctx, key)
-}
-func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-	return b.capability.ValidateCapabilityCandidate(ctx, request)
+	return &Binding{audit: audit, exports: exports, exportStore: exportStore, exportReady: exportReady, actions: detached}, nil
 }
 
 func (b *Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: true, SubjectLifecycle: true, HTTPAdapter: true}}
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: b.exportReady, SubjectLifecycle: true, HTTPAdapter: true}}
 }
 func (b *Binding) Factory() contract.EventFactory                        { return b.audit }
 func (b *Binding) Appender() contract.Appender                           { return b.audit }
