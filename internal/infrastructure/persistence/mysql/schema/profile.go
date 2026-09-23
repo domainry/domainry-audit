@@ -3,6 +3,7 @@ package mysql
 import (
 	"fmt"
 	auditmigration "github.com/domainry/domainry-audit/internal/infrastructure/persistence/database/migration"
+	ormschema "github.com/domainry/domainry-orm/schema"
 )
 
 type Profile struct{}
@@ -27,4 +28,18 @@ func (Profile) ColumnType(kind auditmigration.ColumnKind) (string, error) {
 		return "", fmt.Errorf("Audit MySQL column kind %q is unsupported", kind)
 	}
 	return value, nil
+}
+
+func (profile Profile) ColumnTypeFor(name string, kind auditmigration.ColumnKind) (string, error) {
+	if name == "id" || name == "created_at" {
+		return "VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin", nil
+	}
+	return profile.ColumnType(kind)
+}
+
+func (Profile) AdaptColumn(name string, column ormschema.ColumnDefinition) ormschema.ColumnDefinition {
+	if name == "id" || name == "created_at" {
+		return ormschema.Column(name, ormschema.TextKey(191)).NotNull().CharacterSet("ascii").Collation("ascii_bin")
+	}
+	return column
 }

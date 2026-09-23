@@ -86,6 +86,13 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 					t.Errorf("%s migration retained %q", driver, retired)
 				}
 			}
+			if driver == "mysql" {
+				for _, column := range []string{"`id` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", "`created_at` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"} {
+					if !strings.Contains(joined, column) {
+						t.Errorf("MySQL Audit migration omitted binary cursor column %q", column)
+					}
+				}
+			}
 		})
 	}
 }
