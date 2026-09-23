@@ -4,9 +4,9 @@ go 1.26.0
 
 require (
 	github.com/domainry/domainry-audit-sdk v0.1.8
-	github.com/domainry/domainry-foundation v0.1.19
+	github.com/domainry/domainry-foundation v0.1.36
 	github.com/domainry/domainry-identity-sdk v0.1.14
-	github.com/domainry/domainry-orm v0.1.30
+	github.com/domainry/domainry-orm v0.1.31
 	modernc.org/sqlite v1.57.0
 )
 

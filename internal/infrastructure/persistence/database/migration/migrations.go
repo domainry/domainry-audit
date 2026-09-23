@@ -3,9 +3,15 @@ package migration
 import (
 	"fmt"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	ormschema "github.com/domainry/domainry-orm/schema"
 
 	"github.com/domainry/domainry-audit-sdk/modulehost"
+)
+
+const (
+	MigrationOwner  = "audit"
+	EventsTableName = "_audit_events"
 )
 
 type ColumnKind string
@@ -28,9 +34,9 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if profile == nil {
 		return nil, fmt.Errorf("Audit database engine is required")
 	}
-	eventTable, _, err := ormschema.NewTable(renderer, "_audit_events").Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
+	eventTable, _, err := ormschema.NewTable(renderer, EventsTableName).Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
-		return nil, fmt.Errorf("build Audit table _audit_events: %w", err)
+		return nil, fmt.Errorf("build Audit table %s: %w", EventsTableName, err)
 	}
 	indexStatements := []string{}
 	indexes := []struct {
@@ -38,13 +44,13 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 		unique      bool
 		columns     []string
 	}{
-		{"_audit_events", "idx_audit_event_cursor", false, []string{"workspace_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_actor_cursor", false, []string{"workspace_id", "actor_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_actor_org_cursor", false, []string{"workspace_id", "actor_org_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_record_cursor", false, []string{"workspace_id", "object_key", "record_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_operation_cursor", false, []string{"workspace_id", "operation_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_causation_cursor", false, []string{"workspace_id", "causation_id", "created_at", "id"}},
-		{"_audit_events", "idx_audit_event_owner_run_cursor", false, []string{"workspace_id", "owner_run_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_cursor", false, []string{"workspace_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_actor_cursor", false, []string{"workspace_id", "actor_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_actor_org_cursor", false, []string{"workspace_id", "actor_org_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_record_cursor", false, []string{"workspace_id", "object_key", "record_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_operation_cursor", false, []string{"workspace_id", "operation_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_causation_cursor", false, []string{"workspace_id", "causation_id", "created_at", "id"}},
+		{EventsTableName, "idx_audit_event_owner_run_cursor", false, []string{"workspace_id", "owner_run_id", "created_at", "id"}},
 	}
 	for _, index := range indexes {
 		columns := index.columns
@@ -73,6 +79,17 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	}, nil
 }
 
+func SchemaOwnership() []schemaownership.Table {
+	return []schemaownership.Table{{
+		Name: EventsTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "workspace cursor and actor, organization, record, operation, causation or owner-run cursors enforce a maximum page size",
+		DeletionPolicy:   "append-only event identity is retained; typed subject erasure anonymizes personal projections atomically, while policy-governed archival and purge must respect legal holds",
+	}}
+}
+
+func OwnedTables() []string { return schemaownership.Names(SchemaOwnership()) }
+
 func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 	specs := []struct {
 		name              string
@@ -85,7 +102,7 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 		{"role_key", Key191, true, false}, {"summary", Long, true, false}, {"metadata_json", JSON, false, false},
 		{"before_json", JSON, false, false}, {"after_json", JSON, false, false}, {"created_at", Key40, false, false},
 	}
-	events := modulehost.SchemaTable{Name: "_audit_events", Columns: make([]modulehost.SchemaColumn, len(specs))}
+	events := modulehost.SchemaTable{Name: EventsTableName, Columns: make([]modulehost.SchemaColumn, len(specs))}
 	for index, spec := range specs {
 		physical, err := profile.ColumnType(spec.kind)
 		if err != nil {

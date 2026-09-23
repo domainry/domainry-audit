@@ -11,6 +11,7 @@ import (
 	moduleassembly "github.com/domainry/domainry-audit/internal/assembly/module"
 	audithttp "github.com/domainry/domainry-audit/internal/transport/http/module"
 	actioncontract "github.com/domainry/domainry-foundation/action"
+	"github.com/domainry/domainry-foundation/schemaownership"
 )
 
 type Options = moduleassembly.Options
@@ -18,6 +19,9 @@ type Factory = moduleassembly.Factory
 
 func NewFactory(options Options) *Factory { return moduleassembly.NewFactory(options) }
 func OwnedTables() []string               { return moduleassembly.OwnedTables() }
+func SchemaOwnership() []schemaownership.Table {
+	return moduleassembly.SchemaOwnership()
+}
 func AuthorizationActions() []actioncontract.ActionDefinition {
 	return audithttp.AuthorizationActions()
 }

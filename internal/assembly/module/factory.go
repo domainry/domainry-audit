@@ -18,6 +18,7 @@ import (
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	sharedoperation "github.com/domainry/domainry-foundation/operation"
+	"github.com/domainry/domainry-foundation/schemaownership"
 )
 
 type Options struct{ Clock contractClock }
@@ -26,8 +27,10 @@ type contractClock interface{ Now() time.Time }
 type Factory struct{ options Options }
 
 func OwnedTables() []string {
-	return []string{"_audit_events"}
+	return auditpersistence.OwnedTables()
 }
+
+func SchemaOwnership() []schemaownership.Table { return auditpersistence.SchemaOwnership() }
 
 func SchemaMigrations(dialect modulehost.Dialect, driver string) ([]modulehost.SchemaMigration, error) {
 	return auditpersistence.SchemaMigrations(dialect, driver)
@@ -43,7 +46,7 @@ func (f *Factory) OpenModule(ctx context.Context, application auditsdk.Applicati
 	if err != nil {
 		return nil, err
 	}
-	if err := host.Migrations().ApplyOwnedMigrations(ctx, "audit", migrations); err != nil {
+	if err := host.Migrations().ApplyOwnedMigrations(ctx, auditpersistence.MigrationOwner, migrations); err != nil {
 		return nil, fmt.Errorf("apply Audit Module migrations: %w", err)
 	}
 	return f.open(ctx, application, host)

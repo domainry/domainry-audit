@@ -20,10 +20,24 @@ import (
 	actioncontract "github.com/domainry/domainry-foundation/action"
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	"github.com/domainry/domainry-foundation/schemaownership"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
+
+func TestModulePublishesOnlyAuditOwnedSchema(t *testing.T) {
+	tables := SchemaOwnership()
+	if err := schemaownership.ValidateAll(tables); err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 1 || !slices.Equal(OwnedTables(), schemaownership.Names(tables)) {
+		t.Fatalf("Audit schema ownership=%d tables=%v", len(tables), OwnedTables())
+	}
+	if tables[0].Owner != "audit" || tables[0].Name != "_audit_events" {
+		t.Fatalf("Audit Module claimed foreign table: %+v", tables[0])
+	}
+}
 
 type fixedClock struct{ value time.Time }
 
