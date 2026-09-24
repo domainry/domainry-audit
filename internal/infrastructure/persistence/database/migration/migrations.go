@@ -34,7 +34,9 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if profile == nil {
 		return nil, fmt.Errorf("Audit database engine is required")
 	}
-	eventTable, _, err := ormschema.NewTable(renderer, EventsTableName).Columns(auditColumns(profile)...).PrimaryKey("workspace_id", "id").Build()
+	// Version 1 is already published. Keep both its DDL and baseline byte-for-byte
+	// stable; database-specific refinements belong in a later migration.
+	eventTable, _, err := ormschema.NewTable(renderer, EventsTableName).Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table %s: %w", EventsTableName, err)
 	}
@@ -73,10 +75,23 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if err != nil {
 		return nil, err
 	}
-	return []modulehost.SchemaMigration{
+	migrations := []modulehost.SchemaMigration{
 		{Version: 1, Name: "audit_events", Statements: []string{eventTable}, Baseline: &baseline},
 		{Version: 2, Name: "audit_indexes", Statements: indexStatements},
-	}, nil
+	}
+	if cursorProfile, ok := profile.(interface{ CursorColumnType() string }); ok {
+		cursorType := cursorProfile.CursorColumnType()
+		migrations = append(migrations, modulehost.SchemaMigration{
+			Version: 3,
+			Name:    "audit_cursor_columns",
+			Statements: []string{fmt.Sprintf(
+				"ALTER TABLE %s MODIFY COLUMN %s %s NOT NULL, MODIFY COLUMN %s %s NOT NULL",
+				renderer.Table(EventsTableName), renderer.Identifier("id"), cursorType,
+				renderer.Identifier("created_at"), cursorType,
+			)},
+		})
+	}
+	return migrations, nil
 }
 
 func SchemaOwnership() []schemaownership.Table {
@@ -105,11 +120,6 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 	events := modulehost.SchemaTable{Name: EventsTableName, Columns: make([]modulehost.SchemaColumn, len(specs))}
 	for index, spec := range specs {
 		physical, err := profile.ColumnType(spec.kind)
-		if resolver, ok := profile.(interface {
-			ColumnTypeFor(string, ColumnKind) (string, error)
-		}); ok {
-			physical, err = resolver.ColumnTypeFor(spec.name, spec.kind)
-		}
 		if err != nil {
 			return modulehost.SchemaBaseline{}, fmt.Errorf("resolve Audit baseline column %s: %w", spec.name, err)
 		}
@@ -118,8 +128,8 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 	return modulehost.SchemaBaseline{Tables: []modulehost.SchemaTable{events}}, nil
 }
 
-func auditColumns(profile Profile) []ormschema.ColumnDefinition {
-	columns := []ormschema.ColumnDefinition{
+func auditColumns() []ormschema.ColumnDefinition {
+	return []ormschema.ColumnDefinition{
 		required("id", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("family", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
 		ormschema.Column("object_key", ormschema.TextKey(191)), ormschema.Column("record_id", ormschema.TextKey(191)),
 		ormschema.Column("actor_id", ormschema.TextKey(191)), ormschema.Column("actor_org_id", ormschema.TextKey(191)),
@@ -127,15 +137,6 @@ func auditColumns(profile Profile) []ormschema.ColumnDefinition {
 		ormschema.Column("role_key", ormschema.TextKey(191)), ormschema.Column("summary", ormschema.LongText()),
 		required("metadata_json", ormschema.JSON()), required("before_json", ormschema.JSON()), required("after_json", ormschema.JSON()), required("created_at", ormschema.TextKey(40)),
 	}
-	if adapter, ok := profile.(interface {
-		AdaptColumn(string, ormschema.ColumnDefinition) ormschema.ColumnDefinition
-	}); ok {
-		names := []string{"id", "workspace_id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at"}
-		for index := range columns {
-			columns[index] = adapter.AdaptColumn(names[index], columns[index])
-		}
-	}
-	return columns
 }
 
 func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {

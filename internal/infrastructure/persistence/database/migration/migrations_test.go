@@ -69,13 +69,25 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(migrations) != 2 || len(migrations[0].Statements)+len(migrations[1].Statements) != 8 {
+			wantMigrations, wantStatements := 2, 8
+			if driver == "mysql" {
+				wantMigrations, wantStatements = 3, 9
+			}
+			statementCount := 0
+			for _, migration := range migrations {
+				statementCount += len(migration.Statements)
+			}
+			if len(migrations) != wantMigrations || statementCount != wantStatements {
 				t.Fatalf("migrations=%+v", migrations)
 			}
 			if migrations[0].Baseline == nil || len(migrations[0].Baseline.Tables) != 1 || migrations[1].Baseline != nil {
 				t.Fatalf("migration baseline=%+v", migrations[0].Baseline)
 			}
-			joined := strings.Join(append(append([]string(nil), migrations[0].Statements...), migrations[1].Statements...), "\n")
+			statements := []string{}
+			for _, migration := range migrations {
+				statements = append(statements, migration.Statements...)
+			}
+			joined := strings.Join(statements, "\n")
 			for _, required := range []string{"_audit_events", "idx_audit_event_cursor", "idx_audit_event_actor_cursor", "idx_audit_event_actor_org_cursor", "idx_audit_event_record_cursor", "idx_audit_event_operation_cursor", "idx_audit_event_causation_cursor", "idx_audit_event_owner_run_cursor", "actor_org_id", "operation_id", "causation_id", "owner_run_id"} {
 				if !strings.Contains(joined, required) {
 					t.Errorf("%s migration missing %q", driver, required)
@@ -87,8 +99,14 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 				}
 			}
 			if driver == "mysql" {
+				if strings.Contains(migrations[0].Statements[0], "CHARACTER SET ascii") {
+					t.Fatal("published MySQL Audit migration 1 was edited")
+				}
+				if got := migrations[0].Baseline.Tables[0].Columns[0].Type; got != "VARCHAR(191)" {
+					t.Fatalf("published MySQL Audit migration 1 baseline id type=%q", got)
+				}
 				for _, column := range []string{"`id` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", "`created_at` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"} {
-					if !strings.Contains(joined, column) {
+					if !strings.Contains(migrations[2].Statements[0], column) {
 						t.Errorf("MySQL Audit migration omitted binary cursor column %q", column)
 					}
 				}
