@@ -1,7 +1,10 @@
 package migration_test
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +15,41 @@ import (
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	_ "modernc.org/sqlite"
 )
+
+func TestPublishedMySQLAuditEventsMigrationIdentity(t *testing.T) {
+	renderer, err := ormdialect.ParseRenderer("mysql", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := auditpersistence.SchemaMigrations(renderer, "mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const publishedChecksum = "4426a38fe077b37d1dd02547c1c17b0d286c51a36ae5dcf15ddce5f9be8cf91c"
+	if got := migrationChecksum(migrations[0]); got != publishedChecksum {
+		t.Fatalf("published Audit migration 1 checksum=%s want=%s", got, publishedChecksum)
+	}
+}
+
+func migrationChecksum(migration ormmigration.Migration) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", migration.Version, strings.TrimSpace(migration.Name))
+	for _, statement := range migration.Statements {
+		_, _ = fmt.Fprintf(hash, "%s\x00", statement)
+	}
+	if migration.Baseline != nil {
+		for _, table := range migration.Baseline.Tables {
+			_, _ = fmt.Fprintf(hash, "table\x00%s\x00", table.Name)
+			for _, column := range table.Columns {
+				_, _ = fmt.Fprintf(hash, "column\x00%s\x00%s\x00%t\x00%t\x00", column.Name, column.Type, column.Nullable, column.PrimaryKey)
+			}
+			for _, index := range table.Indexes {
+				_, _ = fmt.Fprintf(hash, "index\x00%s\x00%t\x00%s\x00", index.Name, index.Unique, strings.Join(index.Columns, ","))
+			}
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
 
 func TestSchemaOwnershipMatchesEveryFreshAuditTableAndPrimaryKey(t *testing.T) {
 	tables := auditpersistence.SchemaOwnership()
