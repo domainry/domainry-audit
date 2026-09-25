@@ -32,13 +32,48 @@ type Store struct {
 
 type exportMetadata struct {
 	RoleKey          string                `json:"role_key"`
-	Filters          contract.ExportFilter `json:"filters"`
+	Filters          persistedExportFilter `json:"filters"`
 	ScopeSHA256      string                `json:"scope_sha256"`
 	RowCount         int                   `json:"row_count"`
 	AuditIdentity    string                `json:"audit_identity"`
 	Status           string                `json:"status"`
 	DownloadCount    int                   `json:"download_count,omitempty"`
 	LastDownloadedAt int64                 `json:"last_downloaded_at,omitempty"`
+}
+
+type persistedExportFilter struct {
+	contract.ExportFilter
+	CreatedFrom int64 `json:"created_from,omitempty"`
+	CreatedTo   int64 `json:"created_to,omitempty"`
+}
+
+func persistExportFilter(value contract.ExportFilter) (persistedExportFilter, error) {
+	stored := persistedExportFilter{ExportFilter: value}
+	for _, field := range []struct {
+		input  string
+		output *int64
+	}{{value.CreatedFrom, &stored.CreatedFrom}, {value.CreatedTo, &stored.CreatedTo}} {
+		if strings.TrimSpace(field.input) == "" {
+			continue
+		}
+		instant, err := time.Parse(time.RFC3339Nano, field.input)
+		if err != nil {
+			return persistedExportFilter{}, err
+		}
+		*field.output = instant.UTC().UnixMilli()
+	}
+	return stored, nil
+}
+
+func (value persistedExportFilter) domainFilter() contract.ExportFilter {
+	result := value.ExportFilter
+	if value.CreatedFrom != 0 {
+		result.CreatedFrom = time.UnixMilli(value.CreatedFrom).UTC().Format(time.RFC3339)
+	}
+	if value.CreatedTo != 0 {
+		result.CreatedTo = time.UnixMilli(value.CreatedTo).UTC().Format(time.RFC3339)
+	}
+	return result
 }
 
 func NewStore(artifacts sharedartifact.ManagedStore, content sharedartifact.ContentStore, writer sharedartifact.ContentWriter, operations sharedoperation.Store) *Store {
@@ -87,8 +122,12 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 		err = fmt.Errorf("audit export content store returned mismatched integrity evidence")
 		return contract.ExportArtifact{}, false, s.cleanupUnregisteredContent(ctx, value.WorkspaceID, info.Reference, err)
 	}
+	filters, err := persistExportFilter(value.Filters)
+	if err != nil {
+		return contract.ExportArtifact{}, false, s.cleanupUnregisteredContent(ctx, value.WorkspaceID, info.Reference, err)
+	}
 	metadata, err := json.Marshal(exportMetadata{
-		RoleKey: value.RoleKey, Filters: value.Filters, ScopeSHA256: value.ScopeSHA256,
+		RoleKey: value.RoleKey, Filters: filters, ScopeSHA256: value.ScopeSHA256,
 		RowCount: value.RowCount, AuditIdentity: value.AuditIdentity, Status: value.Status,
 	})
 	if err != nil {
@@ -278,7 +317,7 @@ func exportFromShared(value sharedartifact.Artifact) (contract.ExportArtifact, b
 	}
 	result := contract.ExportArtifact{
 		ID: value.ID, WorkspaceID: value.WorkspaceID, RequesterUserID: value.CreatedBy,
-		RoleKey: metadata.RoleKey, IdempotencyKey: value.IdempotencyKey, Filters: metadata.Filters,
+		RoleKey: metadata.RoleKey, IdempotencyKey: value.IdempotencyKey, Filters: metadata.Filters.domainFilter(),
 		ScopeSHA256: metadata.ScopeSHA256, AuthorizationScopeSHA256: value.AuthorizationScopeSHA256,
 		TokenSHA256: value.DownloadTokenSHA256, Filename: value.Filename,
 		ContentSHA256: value.ContentSHA256, RowCount: metadata.RowCount,
