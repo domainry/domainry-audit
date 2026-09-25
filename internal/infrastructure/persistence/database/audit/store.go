@@ -85,15 +85,17 @@ func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.E
 	if err != nil {
 		return fmt.Errorf("parse audit event created_at: %w", err)
 	}
-	metadata, err := marshalAuditJSON(event.Metadata)
+	// Metadata and snapshots belong to the event producer. Audit does not infer
+	// time semantics from keys in these opaque payloads.
+	metadata, err := json.Marshal(event.Metadata)
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}
-	before, err := marshalAuditJSON(event.Before)
+	before, err := json.Marshal(event.Before)
 	if err != nil {
 		return fmt.Errorf("encode audit before: %w", err)
 	}
-	after, err := marshalAuditJSON(event.After)
+	after, err := json.Marshal(event.After)
 	if err != nil {
 		return fmt.Errorf("encode audit after: %w", err)
 	}
@@ -233,13 +235,13 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 			return nil, err
 		}
 		e.OperationID, e.CausationID, e.OwnerRunID = operationID.String, causationID.String, ownerRunID.String
-		if err := unmarshalAuditJSON([]byte(metadata), &e.Metadata); err != nil {
+		if err := json.Unmarshal([]byte(metadata), &e.Metadata); err != nil {
 			return nil, fmt.Errorf("decode audit metadata: %w", err)
 		}
-		if err := unmarshalAuditJSON([]byte(before), &e.Before); err != nil {
+		if err := json.Unmarshal([]byte(before), &e.Before); err != nil {
 			return nil, fmt.Errorf("decode audit before: %w", err)
 		}
-		if err := unmarshalAuditJSON([]byte(after), &e.After); err != nil {
+		if err := json.Unmarshal([]byte(after), &e.After); err != nil {
 			return nil, fmt.Errorf("decode audit after: %w", err)
 		}
 		e.CreatedAt = auditTimestampText(created)
