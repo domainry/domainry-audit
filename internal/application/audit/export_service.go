@@ -231,14 +231,18 @@ func exportAuthorizationHash(p contract.ExportPrincipal) string {
 func exportHash(v any) string         { encoded, _ := json.Marshal(v); return exportBytesHash(encoded) }
 func exportBytesHash(v []byte) string { sum := sha256.Sum256(v); return hex.EncodeToString(sum[:]) }
 func (s *ExportService) appendExportAudit(ctx context.Context, event string, p contract.ExportPrincipal, a contract.ExportArtifact, extra map[string]any) error {
-	metadata := map[string]any{"artifact_id": a.ID, "audit_identity": a.AuditIdentity, "content_sha256": a.ContentSHA256, "scope_sha256": a.ScopeSHA256, "row_count": a.RowCount, "expires_at": a.ExpiresAt}
+	expiresAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(a.ExpiresAt))
+	if err != nil {
+		return exportError("export_audit_failed", err)
+	}
+	metadata := map[string]any{"artifact_id": a.ID, "audit_identity": a.AuditIdentity, "content_sha256": a.ContentSHA256, "scope_sha256": a.ScopeSHA256, "row_count": a.RowCount, "expires_at": expiresAt.UTC().UnixMilli()}
 	if actorOrgID := exportActorOrgID(p); actorOrgID != "" {
 		metadata["actor_org_id"] = actorOrgID
 	}
 	for k, v := range extra {
 		metadata[k] = v
 	}
-	_, err := s.appender.Append(ctx, contract.AppendRequest{Family: contract.EventFamilyAuditExport, Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
+	_, err = s.appender.Append(ctx, contract.AppendRequest{Family: contract.EventFamilyAuditExport, Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
 	if err != nil {
 		return exportError("export_audit_failed", err)
 	}
