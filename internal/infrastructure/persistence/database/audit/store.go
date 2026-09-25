@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/domainry/domainry-audit-sdk/contract"
 	"github.com/domainry/domainry-audit-sdk/modulehost"
@@ -80,20 +81,24 @@ type resultAdapter struct{ contract.Result }
 func (resultAdapter) LastInsertId() (int64, error) { return 0, nil }
 
 func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.Event) error {
-	metadata, err := json.Marshal(event.Metadata)
+	createdAt, err := auditTimestampMillis(event.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("parse audit event created_at: %w", err)
+	}
+	metadata, err := marshalAuditJSON(event.Metadata)
 	if err != nil {
 		return fmt.Errorf("encode audit metadata: %w", err)
 	}
-	before, err := json.Marshal(event.Before)
+	before, err := marshalAuditJSON(event.Before)
 	if err != nil {
 		return fmt.Errorf("encode audit before: %w", err)
 	}
-	after, err := json.Marshal(event.After)
+	after, err := marshalAuditJSON(event.After)
 	if err != nil {
 		return fmt.Errorf("encode audit after: %w", err)
 	}
 	actorOrgID := eventActorOrgID(event)
-	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Family, event.Event, event.ObjectKey, event.RecordID, event.ActorID, nullableIdentity(actorOrgID), nullableIdentity(event.OperationID), nullableIdentity(event.CausationID), nullableIdentity(event.OwnerRunID), event.RoleKey, event.Summary, string(metadata), string(before), string(after), event.CreatedAt).Build()
+	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Family, event.Event, event.ObjectKey, event.RecordID, event.ActorID, nullableIdentity(actorOrgID), nullableIdentity(event.OperationID), nullableIdentity(event.CausationID), nullableIdentity(event.OwnerRunID), event.RoleKey, event.Summary, string(metadata), string(before), string(after), createdAt).Build()
 	if err != nil {
 		return err
 	}
@@ -168,10 +173,18 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 		}
 	}
 	if value := strings.TrimSpace(queryValue.CreatedFrom); value != "" {
-		predicates = append(predicates, query.GreaterThanOrEqual("created_at", value))
+		createdFrom, err := auditTimestampMillis(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit created_from: %w", err)
+		}
+		predicates = append(predicates, query.GreaterThanOrEqual("created_at", createdFrom))
 	}
 	if value := strings.TrimSpace(queryValue.CreatedTo); value != "" {
-		predicates = append(predicates, query.LessThanOrEqual("created_at", value))
+		createdTo, err := auditTimestampMillis(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit created_to: %w", err)
+		}
+		predicates = append(predicates, query.LessThanOrEqual("created_at", createdTo))
 	}
 	if value := strings.TrimSpace(queryValue.RequestID); value != "" {
 		encoded, _ := json.Marshal(value)
@@ -182,7 +195,11 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 		if err != nil {
 			return nil, fmt.Errorf("decode audit event cursor: %w", err)
 		}
-		predicates = append(predicates, query.Or(query.LessThan("created_at", cursor.CreatedAt), query.And(query.Equal("created_at", cursor.CreatedAt), query.LessThan("id", cursor.ID))))
+		cursorCreatedAt, err := auditTimestampMillis(cursor.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit event cursor created_at: %w", err)
+		}
+		predicates = append(predicates, query.Or(query.LessThan("created_at", cursorCreatedAt), query.And(query.Equal("created_at", cursorCreatedAt), query.LessThan("id", cursor.ID))))
 	}
 	if scopePredicate := auditEventDataScopePredicate(scope); scopePredicate != nil {
 		predicates = append(predicates, scopePredicate)
@@ -209,16 +226,23 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	result := []contract.Event{}
 	for rows.Next() {
 		var e contract.Event
-		var metadata, before, after, created string
+		var metadata, before, after string
+		var created int64
 		var operationID, causationID, ownerRunID sql.NullString
 		if err := rows.Scan(&e.ID, &e.WorkspaceID, &operationID, &causationID, &ownerRunID, &e.Family, &e.Event, &e.ObjectKey, &e.RecordID, &e.ActorID, &e.RoleKey, &e.Summary, &metadata, &before, &after, &created); err != nil {
 			return nil, err
 		}
 		e.OperationID, e.CausationID, e.OwnerRunID = operationID.String, causationID.String, ownerRunID.String
-		_ = json.Unmarshal([]byte(metadata), &e.Metadata)
-		_ = json.Unmarshal([]byte(before), &e.Before)
-		_ = json.Unmarshal([]byte(after), &e.After)
-		e.CreatedAt = created
+		if err := unmarshalAuditJSON([]byte(metadata), &e.Metadata); err != nil {
+			return nil, fmt.Errorf("decode audit metadata: %w", err)
+		}
+		if err := unmarshalAuditJSON([]byte(before), &e.Before); err != nil {
+			return nil, fmt.Errorf("decode audit before: %w", err)
+		}
+		if err := unmarshalAuditJSON([]byte(after), &e.After); err != nil {
+			return nil, fmt.Errorf("decode audit after: %w", err)
+		}
+		e.CreatedAt = auditTimestampText(created)
 		result = append(result, e)
 	}
 	return result, rows.Err()
@@ -287,10 +311,18 @@ func (s *Store) Options(ctx context.Context, workspaceID string, queryValue cont
 		predicates = append(predicates, query.Equal("object_key", value))
 	}
 	if value := strings.TrimSpace(queryValue.CreatedFrom); value != "" {
-		predicates = append(predicates, query.GreaterThanOrEqual("created_at", value))
+		createdFrom, err := auditTimestampMillis(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit created_from: %w", err)
+		}
+		predicates = append(predicates, query.GreaterThanOrEqual("created_at", createdFrom))
 	}
 	if value := strings.TrimSpace(queryValue.CreatedTo); value != "" {
-		predicates = append(predicates, query.LessThanOrEqual("created_at", value))
+		createdTo, err := auditTimestampMillis(value)
+		if err != nil {
+			return nil, fmt.Errorf("parse audit created_to: %w", err)
+		}
+		predicates = append(predicates, query.LessThanOrEqual("created_at", createdTo))
 	}
 	if value := strings.TrimSpace(queryValue.Query); value != "" {
 		predicates = append(predicates, query.LikeEscaped(field, "%"+escapeSQLLike(value)+"%"))
@@ -321,4 +353,16 @@ func escapeSQLLike(value string) string {
 	value = strings.ReplaceAll(value, "~", "~~")
 	value = strings.ReplaceAll(value, "%", "~%")
 	return strings.ReplaceAll(value, "_", "~_")
+}
+
+func auditTimestampMillis(value string) (int64, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return 0, err
+	}
+	return parsed.UTC().UnixMilli(), nil
+}
+
+func auditTimestampText(value int64) string {
+	return time.UnixMilli(value).UTC().Format(time.RFC3339Nano)
 }

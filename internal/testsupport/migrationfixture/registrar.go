@@ -20,7 +20,7 @@ func (r Registrar) Apply(ctx context.Context, owner string, migrations []ormmigr
 	}
 	if _, err := r.Database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS _schema_migrations (
 owner TEXT NOT NULL, version BIGINT NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL,
-dirty BOOLEAN NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (owner, version))`); err != nil {
+dirty BOOLEAN NOT NULL, applied_at BIGINT NOT NULL, PRIMARY KEY (owner, version))`); err != nil {
 		return err
 	}
 	for _, migration := range migrations {
@@ -41,7 +41,7 @@ dirty BOOLEAN NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (owner, version))`
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO _schema_migrations (owner, version, name, checksum, dirty, applied_at) VALUES (?, ?, ?, ?, ?, ?)`, owner, migration.Version, migration.Name, checksum, true, ""); err == nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO _schema_migrations (owner, version, name, checksum, dirty, applied_at) VALUES (?, ?, ?, ?, ?, ?)`, owner, migration.Version, migration.Name, checksum, true, int64(0)); err == nil {
 			for _, statement := range migration.Statements {
 				if _, err = tx.ExecContext(ctx, statement); err != nil {
 					break
@@ -49,7 +49,7 @@ dirty BOOLEAN NOT NULL, applied_at TEXT NOT NULL, PRIMARY KEY (owner, version))`
 			}
 		}
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE _schema_migrations SET dirty = ?, applied_at = ? WHERE owner = ? AND version = ? AND checksum = ?`, false, time.Now().UTC().Format(time.RFC3339Nano), owner, migration.Version, checksum)
+			_, err = tx.ExecContext(ctx, `UPDATE _schema_migrations SET dirty = ?, applied_at = ? WHERE owner = ? AND version = ? AND checksum = ?`, false, time.Now().UTC().UnixMilli(), owner, migration.Version, checksum)
 		}
 		if err != nil {
 			_ = tx.Rollback()

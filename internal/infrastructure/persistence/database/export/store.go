@@ -38,7 +38,7 @@ type exportMetadata struct {
 	AuditIdentity    string                `json:"audit_identity"`
 	Status           string                `json:"status"`
 	DownloadCount    int                   `json:"download_count,omitempty"`
-	LastDownloadedAt string                `json:"last_downloaded_at,omitempty"`
+	LastDownloadedAt int64                 `json:"last_downloaded_at,omitempty"`
 }
 
 func NewStore(artifacts sharedartifact.ManagedStore, content sharedartifact.ContentStore, writer sharedartifact.ContentWriter, operations sharedoperation.Store) *Store {
@@ -243,7 +243,7 @@ func (s *Store) recordExportDownloadWithinDataScope(ctx context.Context, workspa
 	if !observedAt.After(value.UpdatedAt) {
 		observedAt = value.UpdatedAt.Add(time.Nanosecond)
 	}
-	metadata.DownloadCount, metadata.LastDownloadedAt = 1, observedAt.UTC().Format(time.RFC3339Nano)
+	metadata.DownloadCount, metadata.LastDownloadedAt = 1, observedAt.UTC().UnixMilli()
 	raw, err := json.Marshal(metadata)
 	if err != nil {
 		return false, err
@@ -272,6 +272,10 @@ func exportFromShared(value sharedartifact.Artifact) (contract.ExportArtifact, b
 	if err := json.Unmarshal(value.Metadata, &metadata); err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
+	lastDownloadedAt := ""
+	if metadata.LastDownloadedAt != 0 {
+		lastDownloadedAt = time.UnixMilli(metadata.LastDownloadedAt).UTC().Format(time.RFC3339Nano)
+	}
 	result := contract.ExportArtifact{
 		ID: value.ID, WorkspaceID: value.WorkspaceID, RequesterUserID: value.CreatedBy,
 		RoleKey: metadata.RoleKey, IdempotencyKey: value.IdempotencyKey, Filters: metadata.Filters,
@@ -280,7 +284,7 @@ func exportFromShared(value sharedartifact.Artifact) (contract.ExportArtifact, b
 		ContentSHA256: value.ContentSHA256, RowCount: metadata.RowCount,
 		AuditIdentity: metadata.AuditIdentity, Status: metadata.Status,
 		CreatedAt: value.CreatedAt.UTC().Format(time.RFC3339Nano), ExpiresAt: value.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		DownloadCount: metadata.DownloadCount, LastDownloadedAt: metadata.LastDownloadedAt,
+		DownloadCount: metadata.DownloadCount, LastDownloadedAt: lastDownloadedAt,
 	}
 	return result, true, nil
 }

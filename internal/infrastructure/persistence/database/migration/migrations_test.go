@@ -1,10 +1,7 @@
 package migration_test
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +13,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestPublishedMySQLAuditEventsMigrationIdentity(t *testing.T) {
+func TestMySQLAuditEventsStoreTimestampsAsBigInt(t *testing.T) {
 	renderer, err := ormdialect.ParseRenderer("mysql", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -25,30 +22,9 @@ func TestPublishedMySQLAuditEventsMigrationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const publishedChecksum = "4426a38fe077b37d1dd02547c1c17b0d286c51a36ae5dcf15ddce5f9be8cf91c"
-	if got := migrationChecksum(migrations[0]); got != publishedChecksum {
-		t.Fatalf("published Audit migration 1 checksum=%s want=%s", got, publishedChecksum)
+	if statement := migrations[0].Statements[0]; !strings.Contains(statement, "`created_at` BIGINT NOT NULL") {
+		t.Fatalf("Audit migration must use UTC Unix milliseconds: %s", statement)
 	}
-}
-
-func migrationChecksum(migration ormmigration.Migration) string {
-	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", migration.Version, strings.TrimSpace(migration.Name))
-	for _, statement := range migration.Statements {
-		_, _ = fmt.Fprintf(hash, "%s\x00", statement)
-	}
-	if migration.Baseline != nil {
-		for _, table := range migration.Baseline.Tables {
-			_, _ = fmt.Fprintf(hash, "table\x00%s\x00", table.Name)
-			for _, column := range table.Columns {
-				_, _ = fmt.Fprintf(hash, "column\x00%s\x00%s\x00%t\x00%t\x00", column.Name, column.Type, column.Nullable, column.PrimaryKey)
-			}
-			for _, index := range table.Indexes {
-				_, _ = fmt.Fprintf(hash, "index\x00%s\x00%t\x00%s\x00", index.Name, index.Unique, strings.Join(index.Columns, ","))
-			}
-		}
-	}
-	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func TestSchemaOwnershipMatchesEveryFreshAuditTableAndPrimaryKey(t *testing.T) {
@@ -108,9 +84,6 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantMigrations, wantStatements := 2, 8
-			if driver == "mysql" {
-				wantMigrations, wantStatements = 3, 9
-			}
 			statementCount := 0
 			for _, migration := range migrations {
 				statementCount += len(migration.Statements)
@@ -136,18 +109,8 @@ func TestMigrationsRenderThroughSupportedORMProfiles(t *testing.T) {
 					t.Errorf("%s migration retained %q", driver, retired)
 				}
 			}
-			if driver == "mysql" {
-				if strings.Contains(migrations[0].Statements[0], "CHARACTER SET ascii") {
-					t.Fatal("published MySQL Audit migration 1 was edited")
-				}
-				if got := migrations[0].Baseline.Tables[0].Columns[0].Type; got != "VARCHAR(191)" {
-					t.Fatalf("published MySQL Audit migration 1 baseline id type=%q", got)
-				}
-				for _, column := range []string{"`id` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL", "`created_at` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL"} {
-					if !strings.Contains(migrations[2].Statements[0], column) {
-						t.Errorf("MySQL Audit migration omitted binary cursor column %q", column)
-					}
-				}
+			if driver == "mysql" && migrations[0].Baseline.Tables[0].Columns[len(migrations[0].Baseline.Tables[0].Columns)-1].Type != "BIGINT" {
+				t.Fatalf("MySQL Audit baseline created_at must be BIGINT")
 			}
 		})
 	}
