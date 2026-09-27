@@ -18,6 +18,7 @@ import (
 	"github.com/domainry/domainry-audit/internal/testsupport/artifactfixture"
 	"github.com/domainry/domainry-audit/internal/testsupport/migrationfixture"
 	actioncontract "github.com/domainry/domainry-foundation/action"
+	"github.com/domainry/domainry-foundation/apperror"
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	"github.com/domainry/domainry-foundation/schemaownership"
@@ -42,6 +43,13 @@ func TestModulePublishesOnlyAuditOwnedSchema(t *testing.T) {
 type fixedClock struct{ value time.Time }
 
 func (c fixedClock) Now() time.Time { return c.value }
+
+type stepClock struct{ value time.Time }
+
+func (c *stepClock) Now() time.Time {
+	c.value = c.value.Add(time.Millisecond)
+	return c.value
+}
 
 type testHost struct {
 	database  *sql.DB
@@ -99,6 +107,18 @@ func (t testTransaction) QueryRowContext(ctx context.Context, q string, args ...
 }
 
 type testAuditApplicationHost struct{ key []byte }
+
+type scopedAuditApplicationHost struct {
+	testAuditApplicationHost
+	denied map[string]bool
+}
+
+func (h scopedAuditApplicationHost) AuthorizeAuditRecord(_ context.Context, _ modulehost.AuditPrincipal, _, recordID string) error {
+	if h.denied[recordID] {
+		return apperror.New(apperror.KindForbidden, "test.record_denied", nil, nil)
+	}
+	return nil
+}
 
 func (h testAuditApplicationHost) ResolveAuditPrincipal(_ context.Context, request modulehost.AuditPrincipalRequest) (modulehost.AuditPrincipal, error) {
 	return modulehost.AuditPrincipal{
@@ -214,6 +234,95 @@ func TestTransactionalAppendClassificationReplayAndSubjectLifecycle(t *testing.T
 	}
 }
 
+func TestBusinessExportFiltersAndRechecksSourceRecords(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	binding, err := NewFactory(Options{Clock: fixedClock{time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, newTestHost(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close(t.Context())
+	for _, recordID := range []string{"visible", "private"} {
+		if _, err := binding.Appender().Append(t.Context(), contract.AppendRequest{
+			Family: contract.EventFamilyBusinessEntity, Event: "note.updated", ObjectKey: "note", RecordID: recordID,
+			Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}, Summary: recordID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	denied := map[string]bool{"private": true}
+	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), func(_ context.Context, filter contract.ExportFilter, _ contract.ExportPrincipal) error {
+		if denied[filter.RecordID] {
+			return apperror.New(apperror.KindForbidden, "test.record_denied", nil, nil)
+		}
+		return nil
+	})
+	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1"}
+	prepared, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "scope-test", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _, err := binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf}))).ReadAll()
+	if err != nil || len(rows) != 2 || rows[1][3] != "visible" {
+		t.Fatalf("export rows=%v err=%v", rows, err)
+	}
+	denied["visible"] = true
+	if _, _, err := binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, principal); err == nil {
+		t.Fatal("download succeeded after source record access was revoked")
+	}
+}
+
+func TestBusinessExportScansPastUnreadableEvents(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	binding, err := NewFactory(Options{Clock: &stepClock{value: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, newTestHost(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close(t.Context())
+	appendEvent := func(recordID string) {
+		if _, err := binding.Appender().Append(t.Context(), contract.AppendRequest{
+			Family: contract.EventFamilyBusinessEntity, Event: "note.updated", ObjectKey: "note", RecordID: recordID,
+			Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}, Summary: recordID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent("visible")
+	for index := 0; index < 501; index++ {
+		appendEvent("private")
+	}
+	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), func(_ context.Context, filter contract.ExportFilter, _ contract.ExportPrincipal) error {
+		if filter.RecordID == "private" {
+			return apperror.New(apperror.KindForbidden, "test.record_denied", nil, nil)
+		}
+		return nil
+	})
+	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1"}
+	prepared, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "scan-test", principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _, err := binding.Exporter().DownloadExport(t.Context(), prepared.DownloadToken, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf}))).ReadAll()
+	if err != nil || len(rows) != 2 || rows[1][3] != "visible" {
+		t.Fatalf("export rows=%v err=%v", rows, err)
+	}
+}
+
 func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -229,7 +338,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), nil)
+	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), func(context.Context, contract.ExportFilter, contract.ExportPrincipal) error { return nil })
 	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1", RequestID: "prepare-request-1", CorrelationID: "correlation-1"}
 	prepared, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", principal)
 	if err != nil {
@@ -398,6 +507,72 @@ func TestModuleOwnsAuditProductHTTPAdapter(t *testing.T) {
 	adapter.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte("backend.audit.export_request_invalid")) {
 		t.Fatalf("invalid export status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestBusinessAuditPagesExcludeUnreadableSourceRecords(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	binding, err := NewFactory(Options{Clock: fixedClock{time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, newTestHost(t, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close(t.Context())
+	ids := map[string]string{}
+	for _, recordID := range []string{"public-one", "private", "public-two"} {
+		event, appendErr := binding.Appender().Append(t.Context(), contract.AppendRequest{
+			Family: contract.EventFamilyBusinessEntity, Event: "note.updated", ObjectKey: "note", RecordID: recordID,
+			Actor: contract.Actor{WorkspaceID: "workspace", SubjectID: "user"}, Summary: recordID,
+		})
+		if appendErr != nil {
+			t.Fatal(appendErr)
+		}
+		ids[recordID] = event.ID
+	}
+	if err := binding.(auditsdk.ApplicationHostBinder).BindApplicationHost(scopedAuditApplicationHost{
+		testAuditApplicationHost: testAuditApplicationHost{key: []byte("0123456789abcdef0123456789abcdef")},
+		denied:                   map[string]bool{"private": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := binding.(modulehttp.Provider).HTTPAdapters()[0]
+	principal := auditHTTPTestPrincipal()
+	seen := map[string]bool{}
+	cursor := ""
+	for pageIndex := 0; pageIndex < 4; pageIndex++ {
+		path := "/audit/events?page_size=1"
+		if cursor != "" {
+			path += "&cursor=" + cursor
+		}
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: principal}))
+		response := httptest.NewRecorder()
+		adapter.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || bytes.Contains(response.Body.Bytes(), []byte("private")) {
+			t.Fatalf("page status=%d body=%s", response.Code, response.Body.String())
+		}
+		var page struct {
+			Items []struct {
+				ID string `json:"id"`
+			} `json:"items"`
+			NextCursor string `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			seen[item.ID] = true
+		}
+		cursor = page.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if len(seen) != 2 || !seen[ids["public-one"]] || !seen[ids["public-two"]] || seen[ids["private"]] || cursor != "" {
+		t.Fatalf("visible audit IDs=%v cursor=%q", seen, cursor)
 	}
 }
 

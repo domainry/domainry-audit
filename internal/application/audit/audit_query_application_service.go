@@ -137,6 +137,9 @@ func (s *AuditQueryApplicationService) query(ctx context.Context, kind auditdoma
 	if err != nil {
 		return AuditQueryResult{}, auditQueryError(apperror.KindBadRequest, "backend.audit.cursor_invalid", err)
 	}
+	if kind == auditdomain.EventClassBusiness {
+		return s.businessEventsWithinRecordScope(ctx, plan, principal, scope)
+	}
 	events, err := s.audit.ListWithinDataScope(ctx, principal.Identity.WorkspaceID, plan.Query, scope)
 	if err != nil {
 		return AuditQueryResult{}, auditQueryError(apperror.KindInternal, "backend.internal", err)
@@ -146,6 +149,70 @@ func (s *AuditQueryApplicationService) query(ctx context.Context, kind auditdoma
 		return AuditQueryResult{}, err
 	}
 	return auditdomain.ProjectQuery(events, plan), nil
+}
+
+// Audit data scope limits event actors; source record access is a separate
+// boundary. Scan bounded batches so private records do not appear in a page
+// or cause visible records later in the event stream to disappear.
+func (s *AuditQueryApplicationService) businessEventsWithinRecordScope(ctx context.Context, plan auditdomain.QueryPlan, principal modulehost.AuditPrincipal, scope auditrepository.DataScope) (AuditQueryResult, error) {
+	const batchSize = 200
+	const maxScanned = 2000
+	visible := make([]contract.Event, 0, plan.PageSize+1)
+	cursor := plan.Query.Cursor
+	scanned := 0
+	access := map[[2]string]bool{}
+	for scanned < maxScanned && len(visible) <= plan.PageSize {
+		batchQuery := plan.Query
+		batchQuery.Cursor = cursor
+		batchQuery.Limit = batchSize
+		if remaining := maxScanned - scanned; remaining < batchQuery.Limit {
+			batchQuery.Limit = remaining
+		}
+		batch, err := s.audit.ListWithinDataScope(ctx, principal.Identity.WorkspaceID, batchQuery, scope)
+		if err != nil {
+			return AuditQueryResult{}, auditQueryError(apperror.KindInternal, "backend.internal", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, event := range batch {
+			scanned++
+			cursor = contract.EncodeAuditEventCursor(event)
+			if event.RecordID != "" {
+				key := [2]string{event.ObjectKey, event.RecordID}
+				allowed, known := access[key]
+				if !known {
+					if event.ObjectKey != "" {
+						allowed, err = sourceRecordVisible(s.host.AuthorizeAuditRecord(ctx, principal, event.ObjectKey, event.RecordID))
+						if err != nil {
+							return AuditQueryResult{}, err
+						}
+					}
+					access[key] = allowed
+				}
+				if !allowed {
+					continue
+				}
+			}
+			visible = append(visible, event)
+			if len(visible) > plan.PageSize {
+				break
+			}
+		}
+		if len(visible) > plan.PageSize || len(batch) < batchQuery.Limit {
+			break
+		}
+	}
+	projected, err := s.host.ProjectAuditEvents(ctx, principal, visible)
+	if err != nil {
+		return AuditQueryResult{}, err
+	}
+	result := auditdomain.ProjectQuery(projected, plan)
+	if !result.Truncated && scanned == maxScanned {
+		result.Truncated = true
+		result.NextCursor = cursor
+	}
+	return result, nil
 }
 
 func (s *AuditQueryApplicationService) authorizeExportRecord(ctx context.Context, filter contract.ExportFilter, exportPrincipal contract.ExportPrincipal) error {

@@ -20,6 +20,7 @@ import (
 
 const exportTTL = 15 * time.Minute
 const exportMaxRows = 1000
+const exportMaxScanned = 10000
 
 type Clock interface{ Now() time.Time }
 type systemClock struct{}
@@ -63,7 +64,7 @@ func (s *ExportService) PrepareExportWithinDataScope(ctx context.Context, reques
 }
 
 func (s *ExportService) prepareExport(ctx context.Context, request contract.ExportRequest, idempotencyKey string, principal contract.ExportPrincipal, scope auditrepository.DataScope, authorizer contract.ExportAuthorizer) (contract.ExportPrepared, error) {
-	if len(s.exportTokenKey) < 16 {
+	if len(s.exportTokenKey) < 16 || authorizer == nil {
 		return contract.ExportPrepared{}, exportError("export_unavailable", nil)
 	}
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
@@ -80,20 +81,59 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 			return contract.ExportPrepared{}, err
 		}
 	}
-	events, err := s.reader.ListWithinDataScope(ctx, principal.WorkspaceID, contract.AuditEventQuery{Event: filters.Event, ObjectKey: filters.ObjectKey, RecordID: filters.RecordID, ActorID: filters.ActorID, RoleKey: filters.RoleKey, CreatedFrom: filters.CreatedFrom, CreatedTo: filters.CreatedTo, Class: contract.AuditEventClassBusiness, Limit: exportMaxRows}, scope)
-	if err != nil {
-		return contract.ExportPrepared{}, err
+	rows := make([][]string, 0, exportMaxRows)
+	access := map[[2]string]bool{}
+	query := contract.AuditEventQuery{Event: filters.Event, ObjectKey: filters.ObjectKey, RecordID: filters.RecordID, ActorID: filters.ActorID, RoleKey: filters.RoleKey, CreatedFrom: filters.CreatedFrom, CreatedTo: filters.CreatedTo, Class: contract.AuditEventClassBusiness}
+	scanned := 0
+	for scanned < exportMaxScanned && len(rows) < exportMaxRows {
+		query.Limit = 500
+		if remaining := exportMaxScanned - scanned; remaining < query.Limit {
+			query.Limit = remaining
+		}
+		events, err := s.reader.ListWithinDataScope(ctx, principal.WorkspaceID, query, scope)
+		if err != nil {
+			return contract.ExportPrepared{}, err
+		}
+		if len(events) == 0 {
+			break
+		}
+		for _, event := range events {
+			scanned++
+			query.Cursor = contract.EncodeAuditEventCursor(event)
+			if contract.ClassifyAuditEvent(event) != contract.AuditEventClassBusiness {
+				continue
+			}
+			if event.RecordID != "" && authorizer != nil {
+				key := [2]string{event.ObjectKey, event.RecordID}
+				allowed, known := access[key]
+				if !known {
+					if event.ObjectKey != "" {
+						allowed, err = sourceRecordVisible(authorizer(ctx, contract.ExportFilter{ObjectKey: event.ObjectKey, RecordID: event.RecordID}, principal))
+						if err != nil {
+							return contract.ExportPrepared{}, err
+						}
+					}
+					access[key] = allowed
+				}
+				if !allowed {
+					continue
+				}
+			}
+			result := auditservice.ExportEventResult(event)
+			if filters.Result != "" && !strings.EqualFold(filters.Result, result) {
+				continue
+			}
+			rows = append(rows, []string{event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, auditservice.AuditEventRequestID(event), result, auditservice.ExportEventReason(event), event.CreatedAt})
+			if len(rows) == exportMaxRows {
+				break
+			}
+		}
+		if len(events) < query.Limit {
+			break
+		}
 	}
-	rows := make([][]string, 0, len(events))
-	for _, event := range events {
-		if contract.ClassifyAuditEvent(event) != contract.AuditEventClassBusiness {
-			continue
-		}
-		result := auditservice.ExportEventResult(event)
-		if filters.Result != "" && !strings.EqualFold(filters.Result, result) {
-			continue
-		}
-		rows = append(rows, []string{event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, auditservice.AuditEventRequestID(event), result, auditservice.ExportEventReason(event), event.CreatedAt})
+	if scanned == exportMaxScanned && len(rows) < exportMaxRows {
+		return contract.ExportPrepared{}, exportError("export_scan_limit_exceeded", nil)
 	}
 	if len(rows) == 0 {
 		return contract.ExportPrepared{}, exportError("export_no_results", nil)
@@ -103,8 +143,10 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 		return contract.ExportPrepared{}, exportError("export_encode_failed", err)
 	}
 	scopeHash := exportHash(filters)
-	authorizationHash := exportAuthorizationHash(principal)
-	expiresAt := now.Add(exportTTL).Format(time.RFC3339Nano)
+	authorizationHash := exportAuthorizationHash(principal, scope)
+	// Shared Artifact persists expiry in Unix milliseconds. The signed token
+	// must use that same precision before the artifact is written and reread.
+	expiresAt := now.Add(exportTTL).Truncate(time.Millisecond).Format(time.RFC3339Nano)
 	artifactID := exportArtifactID(principal.WorkspaceID, principal.UserID, idempotencyKey)
 	auditIdentity := "audit_events:" + artifactID + ":sha256:" + scopeHash
 	token := s.exportToken(artifactID, scopeHash, expiresAt)
@@ -138,14 +180,17 @@ func (s *ExportService) DownloadExportWithinDataScope(ctx context.Context, token
 }
 
 func (s *ExportService) downloadExport(ctx context.Context, token string, principal contract.ExportPrincipal, scope auditrepository.DataScope, authorizer contract.ExportAuthorizer) ([]byte, string, error) {
-	if len(s.exportTokenKey) < 16 {
+	if len(s.exportTokenKey) < 16 || authorizer == nil {
 		return nil, "", exportError("export_unavailable", nil)
 	}
 	token = strings.TrimSpace(token)
 	if len(token) < 80 || len(token) > 160 {
 		return nil, "", exportError("export_download_not_found", nil)
 	}
-	a, found, err := s.store.ExportByTokenHashWithinDataScope(ctx, principal.WorkspaceID, exportHash(token), principal.UserID, scope)
+	// The artifact belongs to its requester. The event scope controls which
+	// rows can be exported; it is not an ownership scope for the artifact.
+	artifactScope := auditrepository.OwnerDataScope(principal.UserID)
+	a, found, err := s.store.ExportByTokenHashWithinDataScope(ctx, principal.WorkspaceID, exportHash(token), principal.UserID, artifactScope)
 	if err != nil {
 		return nil, "", exportError("export_persistence_failed", err)
 	}
@@ -160,7 +205,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 	if parseErr != nil || !now.Before(expiresAt) {
 		return nil, "", exportError("export_download_expired", nil)
 	}
-	if exportAuthorizationHash(principal) != a.AuthorizationScopeSHA256 {
+	if exportAuthorizationHash(principal, scope) != a.AuthorizationScopeSHA256 {
 		return nil, "", exportError("export_scope_changed", nil)
 	}
 	if authorizer != nil {
@@ -168,7 +213,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 			return nil, "", err
 		}
 	}
-	content, found, err := s.store.ExportContentWithinDataScope(ctx, a.WorkspaceID, a.ID, exportHash(token), principal.UserID, now, scope)
+	content, found, err := s.store.ExportContentWithinDataScope(ctx, a.WorkspaceID, a.ID, exportHash(token), principal.UserID, now, artifactScope)
 	if err != nil {
 		if errors.Is(err, auditrepository.ErrExportContentIntegrity) {
 			return nil, "", exportError("export_integrity_failed", err)
@@ -181,7 +226,12 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 	if exportBytesHash(content) != a.ContentSHA256 || exportHash(a.Filters) != a.ScopeSHA256 {
 		return nil, "", exportError("export_integrity_failed", nil)
 	}
-	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ID, principal.UserID, now.Format(time.RFC3339Nano), scope)
+	if authorizer != nil {
+		if err := reauthorizeExportRows(ctx, content, principal, authorizer); err != nil {
+			return nil, "", err
+		}
+	}
+	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ID, principal.UserID, now.Format(time.RFC3339Nano), artifactScope)
 	if err != nil {
 		return nil, "", exportError("export_persistence_failed", err)
 	}
@@ -191,6 +241,36 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 		}
 	}
 	return append([]byte(nil), content...), a.Filename, nil
+}
+
+func reauthorizeExportRows(ctx context.Context, content []byte, principal contract.ExportPrincipal, authorizer contract.ExportAuthorizer) error {
+	reader := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})))
+	reader.FieldsPerRecord = 10
+	rows, err := reader.ReadAll()
+	if err != nil || len(rows) == 0 || rows[0][0] != "audit_id" || rows[0][2] != "object_key" || rows[0][3] != "record_id" {
+		return exportError("export_integrity_failed", err)
+	}
+	access := map[[2]string]bool{}
+	for _, row := range rows[1:] {
+		if row[3] == "" {
+			continue
+		}
+		key := [2]string{row[2], row[3]}
+		allowed, known := access[key]
+		if !known {
+			if row[2] != "" {
+				allowed, err = sourceRecordVisible(authorizer(ctx, contract.ExportFilter{ObjectKey: row[2], RecordID: row[3]}, principal))
+				if err != nil {
+					return err
+				}
+			}
+			access[key] = allowed
+		}
+		if !allowed {
+			return exportError("export_scope_changed", nil)
+		}
+	}
+	return nil
 }
 
 func encodeExportCSV(rows [][]string) ([]byte, error) {
@@ -216,9 +296,14 @@ func exportArtifactID(w, u, k string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(w) + "\x00" + strings.TrimSpace(u) + "\x00audit_events\x00" + strings.TrimSpace(k)))
 	return "audexp_" + hex.EncodeToString(sum[:16])
 }
-func exportAuthorizationHash(p contract.ExportPrincipal) string {
+func exportAuthorizationHash(p contract.ExportPrincipal, scope auditrepository.DataScope) string {
 	caps := append([]string(nil), p.SystemCapabilities...)
 	sort.Strings(caps)
+	scope = scope.Normalized()
+	subjectIDs := append([]string(nil), scope.SubjectIDs...)
+	organizationIDs := append([]string(nil), scope.OrganizationIDs...)
+	sort.Strings(subjectIDs)
+	sort.Strings(organizationIDs)
 	return exportHash(struct {
 		WorkspaceID           string   `json:"workspace_id"`
 		UserID                string   `json:"user_id"`
@@ -226,7 +311,10 @@ func exportAuthorizationHash(p contract.ExportPrincipal) string {
 		AuthorizationRevision string   `json:"authorization_revision"`
 		SystemScope           string   `json:"system_scope,omitempty"`
 		SystemCapabilities    []string `json:"system_capabilities,omitempty"`
-	}{strings.TrimSpace(p.WorkspaceID), strings.TrimSpace(p.UserID), strings.TrimSpace(p.RoleKey), strings.TrimSpace(p.AuthorizationRevision), p.SystemScope, caps})
+		ScopeAll              bool     `json:"scope_all"`
+		ScopeSubjectIDs       []string `json:"scope_subject_ids,omitempty"`
+		ScopeOrganizationIDs  []string `json:"scope_organization_ids,omitempty"`
+	}{strings.TrimSpace(p.WorkspaceID), strings.TrimSpace(p.UserID), strings.TrimSpace(p.RoleKey), strings.TrimSpace(p.AuthorizationRevision), p.SystemScope, caps, scope.All, subjectIDs, organizationIDs})
 }
 func exportHash(v any) string         { encoded, _ := json.Marshal(v); return exportBytesHash(encoded) }
 func exportBytesHash(v []byte) string { sum := sha256.Sum256(v); return hex.EncodeToString(sum[:]) }
