@@ -10,6 +10,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	"github.com/domainry/domainry-foundation/apperror"
+	"github.com/domainry/domainry-foundation/telemetry"
 )
 
 type auditEventResponse struct {
@@ -79,6 +80,7 @@ func writeAuditJSON(w http.ResponseWriter, status int, value any) {
 
 func writeAuditError(w http.ResponseWriter, err error) {
 	status, code := auditHTTPStatusAndCode(err)
+	telemetry.RecordHTTPStatusError(w, status, code)
 	w.Header().Set("Cache-Control", "no-store")
 	params := apperror.SanitizeParams(apperror.ParamsOf(err))
 	writeAuditJSON(w, status, map[string]any{
