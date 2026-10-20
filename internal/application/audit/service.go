@@ -41,9 +41,6 @@ func (s *Service) Append(ctx context.Context, request contract.AppendRequest) (c
 	}
 	return event, s.store.AppendPrepared(ctx, event)
 }
-func (s *Service) AppendTelemetry(ctx context.Context, request contract.AppendRequest) {
-	_, _ = s.Append(ctx, request)
-}
 func (s *Service) AppendWithin(ctx context.Context, tx contract.Transaction, request contract.AppendRequest) (contract.Event, error) {
 	event, err := s.Build(ctx, request)
 	if err != nil {
