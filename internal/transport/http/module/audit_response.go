@@ -1,7 +1,6 @@
 package module
 
 import (
-	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
@@ -10,7 +9,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditapp "github.com/domainry/domainry-audit/internal/application/audit"
 	"github.com/domainry/domainry-foundation/apperror"
-	"github.com/domainry/domainry-foundation/telemetry"
+	"github.com/domainry/domainry-foundation/httpresponse"
 )
 
 type auditEventResponse struct {
@@ -73,19 +72,13 @@ func auditPage[T any](result auditapp.AuditQueryResult, items []T) auditPageResp
 }
 
 func writeAuditJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	httpresponse.WriteJSON(w, status, value)
 }
 
 func writeAuditError(w http.ResponseWriter, err error) {
 	status, code := auditHTTPStatusAndCode(err)
-	telemetry.RecordHTTPStatusError(w, status, code, err)
 	w.Header().Set("Cache-Control", "no-store")
-	params := apperror.SanitizeParams(apperror.ParamsOf(err))
-	writeAuditJSON(w, status, map[string]any{
-		"error": code, "code": code, "message": code, "message_key": code, "params": params,
-	})
+	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: status, Code: code, Params: apperror.ParamsOf(err), Cause: err})
 }
 
 func auditHTTPStatusAndCode(err error) (int, string) {
