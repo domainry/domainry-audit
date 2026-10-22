@@ -13,18 +13,19 @@ func TestAuditOwnsNumericEventInstantButPreservesOpaquePayloads(t *testing.T) {
 	store := NewStore(db, renderer)
 	instant := time.Date(2026, 9, 25, 12, 0, 0, 123_000_000, time.FixedZone("local", 8*3600))
 	event := contract.Event{
-		ID: "opaque-payload", WorkspaceID: "workspace", Family: contract.EventFamilyBusinessEntity,
+		AuditEventID: auditStoreTestEventID("opaque-payload"), WorkspaceID: "workspace", Family: contract.EventFamilyBusinessEntity,
 		Event: "record.updated", ActorID: "user", CreatedAt: instant.Format(time.RFC3339Nano),
 		Metadata: map[string]any{"created_at": "business-provided-label"},
 		Before:   map[string]any{"updated_at": "opaque external value"},
 		After:    map[string]any{"updated_at": instant.UnixMilli()},
 	}
-	if err := store.AppendPrepared(t.Context(), event); err != nil {
+	storedEvent, err := store.AppendPrepared(t.Context(), event)
+	if err != nil {
 		t.Fatal(err)
 	}
 	var createdAt int64
 	var metadata, before, after string
-	if err := db.QueryRowContext(t.Context(), `SELECT created_at,metadata_json,before_json,after_json FROM _audit_events WHERE id=?`, event.ID).Scan(&createdAt, &metadata, &before, &after); err != nil {
+	if err := db.QueryRowContext(t.Context(), `SELECT created_at,metadata_json,before_json,after_json FROM _audit_events WHERE id=?`, storedEvent.ID).Scan(&createdAt, &metadata, &before, &after); err != nil {
 		t.Fatal(err)
 	}
 	if createdAt != instant.UnixMilli() {

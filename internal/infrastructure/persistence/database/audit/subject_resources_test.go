@@ -15,8 +15,8 @@ func TestSubjectErasureClearsHistoricalSnapshotsForDeclaredResources(t *testing.
 		{"other", "workspace", "administrator", "member-other"},
 		{"workspace", "other-workspace", "subject", "member-one"},
 	} {
-		event := contract.Event{ID: item.id, WorkspaceID: item.workspace, Family: contract.EventFamilyBusinessEntity, Event: "member.updated", ObjectKey: "member", RecordID: item.record, ActorID: item.actor, Summary: "PRIVATE NAME", Metadata: map[string]any{"email": "private@example.test"}, Before: map[string]any{"phone": "PRIVATE PHONE"}, After: map[string]any{"name": "PRIVATE NAME"}, CreatedAt: "2026-09-14T00:00:00Z"}
-		if err := store.AppendPrepared(t.Context(), event); err != nil {
+		event := contract.Event{AuditEventID: auditStoreTestEventID(item.id), WorkspaceID: item.workspace, Family: contract.EventFamilyBusinessEntity, Event: "member.updated", ObjectKey: "member", RecordID: item.record, ActorID: item.actor, Summary: "PRIVATE NAME", Metadata: map[string]any{"email": "private@example.test"}, Before: map[string]any{"phone": "PRIVATE PHONE"}, After: map[string]any{"name": "PRIVATE NAME"}, CreatedAt: "2026-09-14T00:00:00Z"}
+		if _, err := store.AppendPrepared(t.Context(), event); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -28,7 +28,7 @@ func TestSubjectErasureClearsHistoricalSnapshotsForDeclaredResources(t *testing.
 	}
 	for _, id := range []string{"actor", "record", "other", "workspace"} {
 		var summary, metadata, before, after, actor string
-		if err := db.QueryRowContext(t.Context(), `SELECT summary,metadata_json,before_json,after_json,actor_id FROM _audit_events WHERE id=?`, id).Scan(&summary, &metadata, &before, &after, &actor); err != nil {
+		if err := db.QueryRowContext(t.Context(), `SELECT summary,metadata_json,before_json,after_json,actor_id FROM _audit_events WHERE audit_event_id=?`, auditStoreTestEventID(id)).Scan(&summary, &metadata, &before, &after, &actor); err != nil {
 			t.Fatal(err)
 		}
 		if id == "actor" || id == "record" {

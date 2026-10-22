@@ -19,7 +19,7 @@ func TestExportAuditMetadataOwnsNumericExpiry(t *testing.T) {
 	capture := &exportAuditCapture{}
 	service := NewExportService(nil, nil, capture, nil)
 	expires := time.Date(2026, 9, 25, 18, 0, 0, 123_000_000, time.FixedZone("local", 8*3600))
-	artifact := contract.ExportArtifact{ID: "export", ExpiresAt: expires.Format(time.RFC3339Nano)}
+	artifact := contract.ExportArtifact{ArtifactID: "art_00000000000000000000000000000001", ExpiresAt: expires.Format(time.RFC3339Nano)}
 	if err := service.appendExportAudit(t.Context(), "audit_export_prepared", contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user"}, artifact, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ func TestExportFilterInstantsAreNumericInsideArtifactMetadata(t *testing.T) {
 	if err != nil || !fresh {
 		t.Fatalf("created=%+v fresh=%v err=%v", created, fresh, err)
 	}
-	shared, found, err := backend.ByID(t.Context(), created.WorkspaceID, created.ID)
+	shared, found, err := backend.ByID(t.Context(), created.WorkspaceID, created.ArtifactID)
 	if err != nil || !found {
 		t.Fatalf("shared=%+v found=%v err=%v", shared, found, err)
 	}

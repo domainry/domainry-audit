@@ -14,6 +14,7 @@ import (
 	"time"
 
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
+	"github.com/domainry/domainry-foundation/entityid"
 	sharedoperation "github.com/domainry/domainry-foundation/operation"
 )
 
@@ -39,13 +40,26 @@ func key(workspaceID, id string) string {
 func (s *Store) Register(_ context.Context, value sharedartifact.Artifact) (sharedartifact.Artifact, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	identity := key(value.WorkspaceID, value.ID)
+	for _, current := range s.values {
+		if current.WorkspaceID == value.WorkspaceID && current.Owner == value.Owner && current.Kind == value.Kind && current.IdempotencyKey == value.IdempotencyKey {
+			return cloneArtifact(current), false, nil
+		}
+	}
+	if value.ArtifactID == "" {
+		var err error
+		value.ArtifactID, err = entityid.New("art")
+		if err != nil {
+			return sharedartifact.Artifact{}, false, err
+		}
+	}
+	identity := key(value.WorkspaceID, value.ArtifactID)
 	if current, found := s.values[identity]; found {
 		if !reflect.DeepEqual(current, value) {
 			return sharedartifact.Artifact{}, false, sharedartifact.ErrIdentityConflict
 		}
 		return cloneArtifact(current), false, nil
 	}
+	value.ID = int64(len(s.values) + 1)
 	s.values[identity] = cloneArtifact(value)
 	return cloneArtifact(value), true, nil
 }
@@ -55,6 +69,17 @@ func (s *Store) ByID(_ context.Context, workspaceID, id string) (sharedartifact.
 	defer s.mu.Unlock()
 	value, found := s.values[key(workspaceID, id)]
 	return cloneArtifact(value), found, nil
+}
+
+func (s *Store) ByIdempotency(_ context.Context, workspaceID, owner, kind, idempotencyKey string) (sharedartifact.Artifact, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, value := range s.values {
+		if value.WorkspaceID == strings.TrimSpace(workspaceID) && value.Owner == strings.TrimSpace(owner) && value.Kind == strings.TrimSpace(kind) && value.IdempotencyKey == strings.TrimSpace(idempotencyKey) {
+			return cloneArtifact(value), true, nil
+		}
+	}
+	return sharedartifact.Artifact{}, false, nil
 }
 
 func (s *Store) ByDownloadTokenHash(_ context.Context, workspaceID, tokenHash string) (sharedartifact.Artifact, bool, error) {
@@ -84,7 +109,7 @@ func (s *Store) Transition(_ context.Context, workspaceID, id string, expected, 
 func (s *Store) Bind(_ context.Context, value sharedartifact.Binding) (sharedartifact.Binding, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	identity := key(value.WorkspaceID, value.ID)
+	identity := strings.Join([]string{value.WorkspaceID, value.ArtifactID, value.Owner, value.Kind, value.ResourceType, value.ResourceID, value.FieldKey}, "\x00")
 	if current, found := s.bindings[identity]; found {
 		if !reflect.DeepEqual(current, value) {
 			return sharedartifact.Binding{}, false, sharedartifact.ErrBindingConflict
@@ -160,7 +185,7 @@ func artifactScanStatusContains(values []sharedartifact.ScanStatus, value shared
 func (s *Store) Update(_ context.Context, mutation sharedartifact.Mutation) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	identity := key(mutation.WorkspaceID, mutation.ID)
+	identity := key(mutation.WorkspaceID, mutation.ArtifactID)
 	value, found := s.values[identity]
 	if !found || value.Owner != mutation.Owner || value.Kind != mutation.Kind || value.Status != mutation.ExpectedStatus || value.ScanStatus != mutation.ExpectedScanStatus || !mutation.ExpectedUpdatedAt.IsZero() && !value.UpdatedAt.Equal(mutation.ExpectedUpdatedAt) {
 		return false, nil
@@ -238,7 +263,7 @@ func (s *Store) Complete(_ context.Context, completion sharedoperation.Completio
 	defer s.mu.Unlock()
 	identity := operationKey(completion.Scope, completion.Owner, completion.Kind, completion.IdempotencyKey)
 	receipt, found := s.operations[identity]
-	if !found || receipt.Command.ID != completion.ID || receipt.Command.RequestFingerprint != completion.RequestFingerprint || receipt.Status != sharedoperation.StatusStarted {
+	if !found || receipt.Command.OperationID != completion.OperationID || receipt.Command.RequestFingerprint != completion.RequestFingerprint || receipt.Status != sharedoperation.StatusStarted {
 		return fmt.Errorf("shared Operation is not started")
 	}
 	receipt.Status = sharedoperation.StatusSucceeded

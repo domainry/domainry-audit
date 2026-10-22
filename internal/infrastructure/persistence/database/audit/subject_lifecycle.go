@@ -26,8 +26,8 @@ func (s *Store) PreviewSubject(ctx context.Context, workspaceID, identity string
 }
 
 func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string) (json.RawMessage, error) {
-	columns := []string{"id", "event", "object_key", "record_id", "summary"}
-	projections := make([]query.Projection, 0, len(columns))
+	columns := []string{"audit_event_id", "event", "object_key", "record_id", "summary"}
+	projections := []query.Projection{query.Project(query.Column("id"))}
 	for _, column := range columns {
 		projections = append(projections, query.Project(query.Coalesce(query.Column(column), query.Value(""))))
 	}
@@ -43,12 +43,13 @@ func (s *Store) ExportSubject(ctx context.Context, workspaceID, identity string)
 	defer rows.Close()
 	items := []map[string]any{}
 	for rows.Next() {
-		var id, event, objectKey, recordID, summary string
+		var id int64
+		var auditEventID, event, objectKey, recordID, summary string
 		var createdAt int64
-		if err := rows.Scan(&id, &event, &objectKey, &recordID, &summary, &createdAt); err != nil {
+		if err := rows.Scan(&id, &auditEventID, &event, &objectKey, &recordID, &summary, &createdAt); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"id": id, "event": event, "object_key": objectKey, "record_id": recordID, "summary": summary, "created_at": createdAt})
+		items = append(items, map[string]any{"id": id, "audit_event_id": auditEventID, "event": event, "object_key": objectKey, "record_id": recordID, "summary": summary, "created_at": createdAt})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

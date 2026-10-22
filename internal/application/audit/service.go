@@ -39,19 +39,19 @@ func (s *Service) Append(ctx context.Context, request contract.AppendRequest) (c
 	if err != nil {
 		return event, err
 	}
-	return event, s.store.AppendPrepared(ctx, event)
+	return s.store.AppendPrepared(ctx, event)
 }
 func (s *Service) AppendWithin(ctx context.Context, tx contract.Transaction, request contract.AppendRequest) (contract.Event, error) {
 	event, err := s.Build(ctx, request)
 	if err != nil {
 		return event, err
 	}
-	return event, s.store.AppendPreparedWithin(ctx, tx, event)
+	return s.store.AppendPreparedWithin(ctx, tx, event)
 }
-func (s *Service) AppendPrepared(ctx context.Context, event contract.Event) error {
+func (s *Service) AppendPrepared(ctx context.Context, event contract.Event) (contract.Event, error) {
 	return s.store.AppendPrepared(ctx, event)
 }
-func (s *Service) AppendPreparedWithin(ctx context.Context, tx contract.Transaction, event contract.Event) error {
+func (s *Service) AppendPreparedWithin(ctx context.Context, tx contract.Transaction, event contract.Event) (contract.Event, error) {
 	return s.store.AppendPreparedWithin(ctx, tx, event)
 }
 func (s *Service) List(ctx context.Context, workspaceID string, query contract.Query) ([]contract.Event, error) {

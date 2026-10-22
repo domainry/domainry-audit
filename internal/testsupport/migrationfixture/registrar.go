@@ -19,8 +19,8 @@ func (r Registrar) Apply(ctx context.Context, owner string, migrations []ormmigr
 		return fmt.Errorf("test migration registrar is incomplete")
 	}
 	if _, err := r.Database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS _schema_migrations (
-owner TEXT NOT NULL, version BIGINT NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL,
-dirty BOOLEAN NOT NULL, applied_at BIGINT NOT NULL, PRIMARY KEY (owner, version))`); err != nil {
+id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, version BIGINT NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL,
+dirty BOOLEAN NOT NULL, applied_at BIGINT NOT NULL, UNIQUE (owner, version))`); err != nil {
 		return err
 	}
 	for _, migration := range migrations {

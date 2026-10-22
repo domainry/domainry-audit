@@ -34,7 +34,7 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 	if profile == nil {
 		return nil, fmt.Errorf("Audit database engine is required")
 	}
-	eventTable, _, err := ormschema.NewTable(renderer, EventsTableName).Columns(auditColumns()...).PrimaryKey("workspace_id", "id").Build()
+	eventTable, _, err := ormschema.NewTable(renderer, EventsTableName).Columns(auditColumns()...).PrimaryKey("id").Unique("audit_event_id").Unique("workspace_id", "idempotency_key").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Audit table %s: %w", EventsTableName, err)
 	}
@@ -81,8 +81,8 @@ func Migrations(renderer modulehost.Dialect, profile Profile) ([]modulehost.Sche
 
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{{
-		Name: EventsTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
-		RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"workspace_id", "id"},
+		Name: EventsTableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"id"}, EntityIDColumn: "audit_event_id", EntityIDPrefix: "audevt", BusinessKey: []string{"audit_event_id"},
 		BoundedQueryPath: "workspace cursor and actor, organization, record, operation, causation or owner-run cursors enforce a maximum page size",
 		DeletionPolicy:   "append-only event identity is retained; typed subject erasure anonymizes personal projections atomically, while policy-governed archival and purge must respect legal holds",
 	}}
@@ -96,7 +96,7 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 		kind              ColumnKind
 		nullable, primary bool
 	}{
-		{"id", Key191, false, true}, {"workspace_id", Key191, false, true}, {"family", Key191, false, false}, {"event", Key191, false, false},
+		{"id", BigInt, false, true}, {"audit_event_id", Key191, false, false}, {"idempotency_key", Key191, true, false}, {"workspace_id", Key191, false, false}, {"family", Key191, false, false}, {"event", Key191, false, false},
 		{"object_key", Key191, true, false}, {"record_id", Key191, true, false}, {"actor_id", Key191, true, false}, {"actor_org_id", Key191, true, false},
 		{"operation_id", Key191, true, false}, {"causation_id", Key191, true, false}, {"owner_run_id", Key191, true, false},
 		{"role_key", Key191, true, false}, {"summary", Long, true, false}, {"metadata_json", JSON, false, false},
@@ -115,7 +115,7 @@ func schemaBaseline(profile Profile) (modulehost.SchemaBaseline, error) {
 
 func auditColumns() []ormschema.ColumnDefinition {
 	return []ormschema.ColumnDefinition{
-		required("id", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("family", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
+		ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement(), required("audit_event_id", ormschema.TextKey(96)), ormschema.Column("idempotency_key", ormschema.TextKey(191)), required("workspace_id", ormschema.TextKey(191)), required("family", ormschema.TextKey(191)), required("event", ormschema.TextKey(191)),
 		ormschema.Column("object_key", ormschema.TextKey(191)), ormschema.Column("record_id", ormschema.TextKey(191)),
 		ormschema.Column("actor_id", ormschema.TextKey(191)), ormschema.Column("actor_org_id", ormschema.TextKey(191)),
 		ormschema.Column("operation_id", ormschema.TextKey(191)), ormschema.Column("causation_id", ormschema.TextKey(191)), ormschema.Column("owner_run_id", ormschema.TextKey(191)),

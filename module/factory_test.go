@@ -240,7 +240,8 @@ func TestBusinessExportFiltersAndRechecksSourceRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	binding, err := NewFactory(Options{Clock: fixedClock{time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, newTestHost(t, db))
+	host := newTestHost(t, db)
+	binding, err := NewFactory(Options{Clock: fixedClock{time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}}).OpenModule(t.Context(), auditsdk.ApplicationRef{InstallationID: "test"}, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +348,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	replayPrincipal := principal
 	replayPrincipal.RequestID = "prepare-request-2"
 	replayed, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", replayPrincipal)
-	if err != nil || replayed.ID != prepared.ID {
+	if err != nil || replayed.ArtifactID != prepared.ArtifactID {
 		t.Fatalf("replay=%+v err=%v", replayed, err)
 	}
 	conflictPrincipal := principal
@@ -367,7 +368,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("csv rows=%v err=%v", rows, err)
 	}
-	wantHeader := []string{"audit_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}
+	wantHeader := []string{"audit_event_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}
 	if !slices.Equal(rows[0], wantHeader) || rows[1][5] != "member" || rows[1][6] != "source-request" || rows[1][7] != "completed" || rows[1][8] != "order_fulfilled" {
 		t.Fatalf("csv=%v", rows)
 	}
@@ -530,7 +531,7 @@ func TestBusinessAuditPagesExcludeUnreadableSourceRecords(t *testing.T) {
 		if appendErr != nil {
 			t.Fatal(appendErr)
 		}
-		ids[recordID] = event.ID
+		ids[recordID] = event.AuditEventID
 	}
 	if err := binding.(auditsdk.ApplicationHostBinder).BindApplicationHost(scopedAuditApplicationHost{
 		testAuditApplicationHost: testAuditApplicationHost{key: []byte("0123456789abcdef0123456789abcdef")},
@@ -556,7 +557,7 @@ func TestBusinessAuditPagesExcludeUnreadableSourceRecords(t *testing.T) {
 		}
 		var page struct {
 			Items []struct {
-				ID string `json:"id"`
+				AuditEventID string `json:"audit_event_id"`
 			} `json:"items"`
 			NextCursor string `json:"next_cursor"`
 		}
@@ -564,7 +565,7 @@ func TestBusinessAuditPagesExcludeUnreadableSourceRecords(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, item := range page.Items {
-			seen[item.ID] = true
+			seen[item.AuditEventID] = true
 		}
 		cursor = page.NextCursor
 		if cursor == "" {

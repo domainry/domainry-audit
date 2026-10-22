@@ -2,7 +2,9 @@ package module_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -148,8 +150,8 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 		t.Fatal(err)
 	}
 	replay, err := binding.Appender().Append(t.Context(), idempotent)
-	if err != nil || replay.ID != first.ID {
-		t.Fatalf("exact replay: first=%s replay=%s err=%v", first.ID, replay.ID, err)
+	if err != nil || replay.ID != first.ID || replay.AuditEventID != first.AuditEventID {
+		t.Fatalf("exact replay: first=%+v replay=%+v err=%v", first, replay, err)
 	}
 	conflict := idempotent
 	conflict.Summary = "different payload"
@@ -174,9 +176,9 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 		if event.WorkspaceID != "tenant-a" {
 			t.Fatalf("cross-workspace event leaked: %+v", event)
 		}
-		byID[event.ID] = event
+		byID[event.AuditEventID] = event
 	}
-	stored := byID[created.ID]
+	stored := byID[created.AuditEventID]
 	if stored.Summary != "original" || stored.Metadata["result"] != "completed" || stored.Before["status"] != "pending" || stored.After["status"] != "completed" {
 		t.Fatalf("caller mutation changed stored event: %+v", stored)
 	}
@@ -192,8 +194,8 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 
 	createdAt := now.Add(-time.Hour).Format(time.RFC3339)
 	for _, id := range []string{"event-03", "event-01", "event-05", "event-02", "event-04"} {
-		if err := binding.PreparedAppender().AppendPrepared(t.Context(), contract.Event{
-			ID: id, WorkspaceID: "tenant-page", Family: contract.EventFamilyBusinessEntity, Event: "order.viewed", ActorID: "actor", Metadata: map[string]any{}, CreatedAt: createdAt,
+		if _, err := binding.PreparedAppender().AppendPrepared(t.Context(), contract.Event{
+			AuditEventID: integrationAuditEventID(id), WorkspaceID: "tenant-page", Family: contract.EventFamilyBusinessEntity, Event: "order.viewed", ActorID: "actor", Metadata: map[string]any{}, CreatedAt: createdAt,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +212,7 @@ func TestIntegrationPublicSDKAppendQueryIsImmutableWorkspaceScopedAndStable(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := append(append(eventIDs(page1), eventIDs(page2)...), eventIDs(page3)...); !reflect.DeepEqual(got, []string{"event-05", "event-04", "event-03", "event-02", "event-01"}) {
+	if got := append(append(eventIDs(page1), eventIDs(page2)...), eventIDs(page3)...); !reflect.DeepEqual(got, []string{integrationAuditEventID("event-04"), integrationAuditEventID("event-02"), integrationAuditEventID("event-05"), integrationAuditEventID("event-01"), integrationAuditEventID("event-03")}) {
 		t.Fatalf("unstable keyset order across equal timestamps: %v", got)
 	}
 }
@@ -262,7 +264,7 @@ func TestIntegrationPublicModuleSharesCallerTransactionCommitAndRollback(t *test
 		t.Fatalf("host records after commit/rollback=%v", got)
 	}
 	events, err := binding.Reader().List(t.Context(), "tenant-transaction", contract.Query{})
-	if err != nil || !reflect.DeepEqual(eventIDs(events), []string{contract.IdempotentEventID("tenant-transaction", "committed")}) {
+	if err != nil || len(events) != 1 || events[0].AuditEventID == "" {
 		t.Fatalf("audit rows did not share caller transaction boundary: events=%+v err=%v", events, err)
 	}
 }
@@ -340,20 +342,23 @@ func TestIntegrationConcurrentIdempotentAppendConverges(t *testing.T) {
 			results <- struct {
 				id  string
 				err error
-			}{id: event.ID, err: err}
+			}{id: event.AuditEventID, err: err}
 		}()
 	}
 	close(start)
 	wait.Wait()
 	close(results)
-	wantID := contract.IdempotentEventID("tenant-concurrent", "concurrent-request")
+	wantID := ""
 	for result := range results {
+		if wantID == "" && result.err == nil {
+			wantID = result.id
+		}
 		if result.err != nil || result.id != wantID {
 			t.Errorf("concurrent replay id=%q err=%v", result.id, result.err)
 		}
 	}
 	events, err := binding.Reader().List(t.Context(), "tenant-concurrent", contract.Query{})
-	if err != nil || len(events) != 1 || events[0].ID != wantID {
+	if err != nil || len(events) != 1 || events[0].AuditEventID != wantID {
 		t.Fatalf("concurrent replay persistence: events=%+v err=%v", events, err)
 	}
 }
@@ -409,9 +414,14 @@ func openIntegrationModule(t *testing.T, host integrationHost, clock integration
 func eventIDs(events []contract.Event) []string {
 	result := make([]string, len(events))
 	for index := range events {
-		result[index] = events[index].ID
+		result[index] = events[index].AuditEventID
 	}
 	return result
+}
+
+func integrationAuditEventID(seed string) string {
+	digest := sha256.Sum256([]byte(seed))
+	return "audevt_" + hex.EncodeToString(digest[:16])
 }
 
 func createHostRecordTable(t *testing.T, database *sql.DB, renderer ormdialect.Renderer) {

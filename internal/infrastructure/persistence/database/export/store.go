@@ -14,6 +14,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	sharedartifact "github.com/domainry/domainry-foundation/artifact"
+	"github.com/domainry/domainry-foundation/entityid"
 	sharedoperation "github.com/domainry/domainry-foundation/operation"
 )
 
@@ -87,20 +88,24 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 	if err := s.ready(); err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
-	value.ID = exportID(value)
-	if current, found, err := s.byID(ctx, value.WorkspaceID, value.ID); err != nil {
+	if currentArtifact, found, err := s.artifacts.ByIdempotency(ctx, value.WorkspaceID, sharedartifact.OwnerAudit, "export", value.IdempotencyKey); err != nil {
 		return contract.ExportArtifact{}, false, err
 	} else if found {
+		current, _, convertErr := exportFromShared(currentArtifact)
+		if convertErr != nil {
+			return contract.ExportArtifact{}, false, convertErr
+		}
 		if !sameExportRequest(current, value) {
 			return contract.ExportArtifact{}, false, contract.ErrExportIdempotencyConflict
 		}
 		if err := s.bindRequester(ctx, current); err != nil {
 			return contract.ExportArtifact{}, false, err
 		}
-		if err := s.ensurePrepareOperation(ctx, current); err != nil {
+		operationID, err := s.ensurePrepareOperation(ctx, current)
+		if err != nil {
 			return contract.ExportArtifact{}, false, err
 		}
-		if err := s.bindOperation(ctx, current); err != nil {
+		if err := s.bindOperation(ctx, current, operationID); err != nil {
 			return contract.ExportArtifact{}, false, err
 		}
 		return current, false, nil
@@ -114,7 +119,7 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 	if err != nil {
 		return contract.ExportArtifact{}, false, fmt.Errorf("parse audit export expiry: %w", err)
 	}
-	info, err := s.writer.PutImmutable(ctx, value.WorkspaceID, "audit-export:"+value.ID, value.Content)
+	info, err := s.writer.PutImmutable(ctx, value.WorkspaceID, "audit-export:"+exportID(value), value.Content)
 	if err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
@@ -134,7 +139,7 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 		return contract.ExportArtifact{}, false, s.cleanupUnregisteredContent(ctx, value.WorkspaceID, info.Reference, err)
 	}
 	registered, created, err := s.artifacts.Register(ctx, sharedartifact.Artifact{
-		ID: value.ID, WorkspaceID: value.WorkspaceID, Owner: sharedartifact.OwnerAudit, Kind: "export",
+		ArtifactID: value.ArtifactID, WorkspaceID: value.WorkspaceID, Owner: sharedartifact.OwnerAudit, Kind: "export",
 		IdempotencyKey: value.IdempotencyKey, CreatedBy: value.RequesterUserID,
 		Filename: value.Filename, MediaType: "text/csv", ContentSHA256: value.ContentSHA256,
 		SizeBytes: int64(len(value.Content)), StorageReference: info.Reference,
@@ -143,17 +148,22 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 		Metadata: metadata, CreatedAt: createdAt, UpdatedAt: createdAt,
 	})
 	if err != nil {
-		if current, found, readErr := s.byID(ctx, value.WorkspaceID, value.ID); readErr == nil && found {
+		if currentArtifact, found, readErr := s.artifacts.ByIdempotency(ctx, value.WorkspaceID, sharedartifact.OwnerAudit, "export", value.IdempotencyKey); readErr == nil && found {
+			current, _, convertErr := exportFromShared(currentArtifact)
+			if convertErr != nil {
+				return contract.ExportArtifact{}, false, convertErr
+			}
 			if !sameExportRequest(current, value) {
 				return contract.ExportArtifact{}, false, contract.ErrExportIdempotencyConflict
 			}
 			if bindErr := s.bindRequester(ctx, current); bindErr != nil {
 				return contract.ExportArtifact{}, false, bindErr
 			}
-			if operationErr := s.ensurePrepareOperation(ctx, current); operationErr != nil {
+			operationID, operationErr := s.ensurePrepareOperation(ctx, current)
+			if operationErr != nil {
 				return contract.ExportArtifact{}, false, operationErr
 			}
-			if bindErr := s.bindOperation(ctx, current); bindErr != nil {
+			if bindErr := s.bindOperation(ctx, current, operationID); bindErr != nil {
 				return contract.ExportArtifact{}, false, bindErr
 			}
 			return current, false, nil
@@ -167,10 +177,11 @@ func (s *Store) CreateOrGetExport(ctx context.Context, value contract.ExportArti
 	if err := s.bindRequester(ctx, stored); err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
-	if err := s.ensurePrepareOperation(ctx, stored); err != nil {
+	operationID, err := s.ensurePrepareOperation(ctx, stored)
+	if err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
-	if err := s.bindOperation(ctx, stored); err != nil {
+	if err := s.bindOperation(ctx, stored, operationID); err != nil {
 		return contract.ExportArtifact{}, false, err
 	}
 	return stored, created, nil
@@ -288,7 +299,7 @@ func (s *Store) recordExportDownloadWithinDataScope(ctx context.Context, workspa
 		return false, err
 	}
 	return s.artifacts.Update(ctx, sharedartifact.Mutation{
-		WorkspaceID: value.WorkspaceID, ID: value.ID, Owner: value.Owner, Kind: value.Kind,
+		WorkspaceID: value.WorkspaceID, ArtifactID: value.ArtifactID, Owner: value.Owner, Kind: value.Kind,
 		ExpectedStatus: value.Status, ExpectedScanStatus: value.ScanStatus, ExpectedUpdatedAt: value.UpdatedAt,
 		Status: value.Status, ScanStatus: value.ScanStatus, ExpiresAt: value.ExpiresAt,
 		Metadata: raw, UpdatedAt: observedAt,
@@ -316,7 +327,7 @@ func exportFromShared(value sharedartifact.Artifact) (contract.ExportArtifact, b
 		lastDownloadedAt = time.UnixMilli(metadata.LastDownloadedAt).UTC().Format(time.RFC3339Nano)
 	}
 	result := contract.ExportArtifact{
-		ID: value.ID, WorkspaceID: value.WorkspaceID, RequesterUserID: value.CreatedBy,
+		ArtifactID: value.ArtifactID, WorkspaceID: value.WorkspaceID, RequesterUserID: value.CreatedBy,
 		RoleKey: metadata.RoleKey, IdempotencyKey: value.IdempotencyKey, Filters: metadata.Filters.domainFilter(),
 		ScopeSHA256: metadata.ScopeSHA256, AuthorizationScopeSHA256: value.AuthorizationScopeSHA256,
 		TokenSHA256: value.DownloadTokenSHA256, Filename: value.Filename,
@@ -334,22 +345,22 @@ func (s *Store) bindRequester(ctx context.Context, value contract.ExportArtifact
 		return err
 	}
 	_, _, err = s.artifacts.Bind(ctx, sharedartifact.Binding{
-		ID: value.ID + ":requester", WorkspaceID: value.WorkspaceID, ArtifactID: value.ID,
+		WorkspaceID: value.WorkspaceID, ArtifactID: value.ArtifactID,
 		Owner: sharedartifact.OwnerAudit, Kind: sharedartifact.BindingSubject,
 		ResourceType: "audit_export_requester", ResourceID: value.RequesterUserID, CreatedAt: createdAt,
 	})
 	return err
 }
 
-func (s *Store) bindOperation(ctx context.Context, value contract.ExportArtifact) error {
+func (s *Store) bindOperation(ctx context.Context, value contract.ExportArtifact, operationID string) error {
 	createdAt, err := time.Parse(time.RFC3339Nano, value.CreatedAt)
 	if err != nil {
 		return err
 	}
 	_, _, err = s.artifacts.Bind(ctx, sharedartifact.Binding{
-		ID: value.ID + ":operation", WorkspaceID: value.WorkspaceID, ArtifactID: value.ID,
+		WorkspaceID: value.WorkspaceID, ArtifactID: value.ArtifactID,
 		Owner: sharedartifact.OwnerAudit, Kind: sharedartifact.BindingOperation,
-		ResourceType: "operation", ResourceID: exportOperationID(value.ID), CreatedAt: createdAt,
+		ResourceType: "operation", ResourceID: operationID, CreatedAt: createdAt,
 	})
 	return err
 }
@@ -360,65 +371,69 @@ type exportOperationResult struct {
 	ScopeSHA256   string `json:"scope_sha256"`
 }
 
-func (s *Store) ensurePrepareOperation(ctx context.Context, value contract.ExportArtifact) error {
+func (s *Store) ensurePrepareOperation(ctx context.Context, value contract.ExportArtifact) (string, error) {
 	createdAt, err := time.Parse(time.RFC3339Nano, value.CreatedAt)
 	if err != nil {
-		return err
+		return "", err
+	}
+	operationID, err := entityid.New("op")
+	if err != nil {
+		return "", err
 	}
 	fingerprint := exportOperationFingerprint(value)
 	command := sharedoperation.Command{
-		ID: exportOperationID(value.ID),
+		OperationID: operationID,
 		Scope: sharedoperation.Scope{
-			WorkspaceID: value.WorkspaceID, ResourceType: "audit_export", ResourceID: value.ID,
+			WorkspaceID: value.WorkspaceID, ResourceType: "audit_export", ResourceID: value.ArtifactID,
 		},
 		Owner: exportOperationOwner, Kind: exportOperationKind, ActionKey: exportOperationActionKey,
 		IdempotencyKey: value.IdempotencyKey, RequestFingerprint: fingerprint,
-		RequestedBy: value.RequesterUserID, Reason: "prepare audit export", Reference: value.ID,
-		StatusURL: "/api/audit/exports/" + value.ID, CreatedAt: createdAt,
+		RequestedBy: value.RequesterUserID, Reason: "prepare audit export", Reference: value.ArtifactID,
+		StatusURL: "/api/audit/exports/" + value.ArtifactID, CreatedAt: createdAt,
 	}
 	receipt, _, err := s.operations.Claim(ctx, command)
 	if errors.Is(err, sharedoperation.ErrIdempotencyConflict) {
-		return contract.ErrExportIdempotencyConflict
+		return "", contract.ErrExportIdempotencyConflict
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := validatePrepareOperationReceipt(receipt, command, value); err != nil {
-		return err
+		return "", err
 	}
 	if receipt.Status == sharedoperation.StatusSucceeded {
-		return nil
+		return receipt.Command.OperationID, nil
 	}
-	result, err := json.Marshal(exportOperationResult{ArtifactID: value.ID, ContentSHA256: value.ContentSHA256, ScopeSHA256: value.ScopeSHA256})
+	result, err := json.Marshal(exportOperationResult{ArtifactID: value.ArtifactID, ContentSHA256: value.ContentSHA256, ScopeSHA256: value.ScopeSHA256})
 	if err != nil {
-		return err
+		return "", err
 	}
 	completion := sharedoperation.Completion{
-		ID: command.ID, Scope: command.Scope, Owner: command.Owner, Kind: command.Kind,
+		OperationID: receipt.Command.OperationID, Scope: command.Scope, Owner: command.Owner, Kind: command.Kind,
 		IdempotencyKey: command.IdempotencyKey, RequestFingerprint: command.RequestFingerprint,
 		Result: result, CompletedAt: createdAt,
 	}
 	if err := s.operations.Complete(ctx, completion); err == nil {
-		return nil
+		return receipt.Command.OperationID, nil
 	}
 	// A concurrent exact replay may have completed the same command between
 	// Claim and Complete. Re-read through the idempotent Claim boundary and
 	// accept only the exact succeeded receipt.
 	receipt, _, claimErr := s.operations.Claim(ctx, command)
 	if claimErr != nil {
-		return claimErr
+		return "", claimErr
 	}
 	if err := validatePrepareOperationReceipt(receipt, command, value); err != nil {
-		return err
+		return "", err
 	}
 	if receipt.Status != sharedoperation.StatusSucceeded {
-		return fmt.Errorf("audit export prepare Operation remained in status %q", receipt.Status)
+		return "", fmt.Errorf("audit export prepare Operation remained in status %q", receipt.Status)
 	}
-	return nil
+	return receipt.Command.OperationID, nil
 }
 
 func validatePrepareOperationReceipt(receipt sharedoperation.Receipt, command sharedoperation.Command, value contract.ExportArtifact) error {
-	if receipt.Command.ID != command.ID || receipt.Command.Owner != command.Owner || receipt.Command.Kind != command.Kind || receipt.Command.RequestFingerprint != command.RequestFingerprint {
+	if receipt.Command.Owner != command.Owner || receipt.Command.Kind != command.Kind || receipt.Command.RequestFingerprint != command.RequestFingerprint {
 		return contract.ErrExportIdempotencyConflict
 	}
 	if receipt.Status == sharedoperation.StatusStarted {
@@ -431,14 +446,10 @@ func validatePrepareOperationReceipt(receipt sharedoperation.Receipt, command sh
 	if err := json.Unmarshal(receipt.Result, &result); err != nil {
 		return fmt.Errorf("decode audit export prepare Operation result: %w", err)
 	}
-	if result.ArtifactID != value.ID || result.ContentSHA256 != value.ContentSHA256 || result.ScopeSHA256 != value.ScopeSHA256 {
+	if result.ArtifactID != value.ArtifactID || result.ContentSHA256 != value.ContentSHA256 || result.ScopeSHA256 != value.ScopeSHA256 {
 		return fmt.Errorf("audit export prepare Operation result does not match the Artifact")
 	}
 	return nil
-}
-
-func exportOperationID(artifactID string) string {
-	return "audit_export_prepare:" + strings.TrimSpace(artifactID)
 }
 
 func exportOperationFingerprint(value contract.ExportArtifact) string {
@@ -478,7 +489,7 @@ func exportRequesterAllowed(createdBy, requesterUserID string, scope auditreposi
 }
 
 func validateExport(value contract.ExportArtifact) error {
-	if strings.TrimSpace(value.WorkspaceID) == "" || strings.TrimSpace(value.RequesterUserID) == "" || strings.TrimSpace(value.IdempotencyKey) == "" || strings.TrimSpace(value.ScopeSHA256) == "" || strings.TrimSpace(value.AuthorizationScopeSHA256) == "" || strings.TrimSpace(value.TokenSHA256) == "" || strings.TrimSpace(value.ContentSHA256) == "" || strings.TrimSpace(value.AuditIdentity) == "" || value.RowCount < 1 || len(value.Content) == 0 {
+	if entityid.Validate("art", value.ArtifactID) != nil || strings.TrimSpace(value.WorkspaceID) == "" || strings.TrimSpace(value.RequesterUserID) == "" || strings.TrimSpace(value.IdempotencyKey) == "" || strings.TrimSpace(value.ScopeSHA256) == "" || strings.TrimSpace(value.AuthorizationScopeSHA256) == "" || strings.TrimSpace(value.TokenSHA256) == "" || strings.TrimSpace(value.ContentSHA256) == "" || strings.TrimSpace(value.AuditIdentity) == "" || value.RowCount < 1 || len(value.Content) == 0 {
 		return fmt.Errorf("complete audit export identity, scope, and content are required")
 	}
 	return nil

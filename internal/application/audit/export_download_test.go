@@ -105,7 +105,7 @@ func TestDownloadExportOpensBlobOnlyAfterAuthorization(t *testing.T) {
 	})
 }
 
-const exportFixtureCSV = "audit_id,event,object_key,record_id,actor_id,role_key,request_id,result,reason,created_at\naudit-1,order.completed,order,order-1,requester,member,request-1,success,completed,2026-09-23T10:00:00Z\n"
+const exportFixtureCSV = "audit_event_id,event,object_key,record_id,actor_id,role_key,request_id,result,reason,created_at\naudevt-1,order.completed,order,order-1,requester,member,request-1,success,completed,2026-09-23T10:00:00Z\n"
 
 func exportDownloadFixture(now time.Time, principal contract.ExportPrincipal, expiresAt time.Time, authorizer contract.ExportAuthorizer, scopes ...auditrepository.DataScope) (*ExportService, *exportDownloadStore, string) {
 	if authorizer == nil {
@@ -119,14 +119,14 @@ func exportDownloadFixture(now time.Time, principal contract.ExportPrincipal, ex
 		scope = scopes[0]
 	}
 	store.artifact = contract.ExportArtifact{
-		ID: "audexp_download", WorkspaceID: principal.WorkspaceID, RequesterUserID: principal.UserID,
+		ArtifactID: "art_00000000000000000000000000000001", WorkspaceID: principal.WorkspaceID, RequesterUserID: principal.UserID,
 		RoleKey: principal.RoleKey, Filters: contract.ExportFilter{Event: "order.completed"},
 		ScopeSHA256:              exportHash(contract.ExportFilter{Event: "order.completed"}),
 		AuthorizationScopeSHA256: exportAuthorizationHash(principal, scope), Filename: "audit.csv",
 		ContentSHA256: exportBytesHash(store.content), Status: "prepared",
 		CreatedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), ExpiresAt: expiresAt.Format(time.RFC3339Nano),
 	}
-	token := service.exportToken(store.artifact.ID, store.artifact.ScopeSHA256, store.artifact.ExpiresAt)
+	token := service.exportToken(store.artifact.ArtifactID, store.artifact.ScopeSHA256, store.artifact.ExpiresAt)
 	store.artifact.TokenSHA256 = exportHash(token)
 	return service, store, token
 }
@@ -161,7 +161,7 @@ func (s *exportDownloadStore) ExportByTokenHashWithinDataScope(_ context.Context
 
 func (s *exportDownloadStore) ExportContentWithinDataScope(_ context.Context, workspaceID, artifactID, tokenHash, requesterUserID string, authorizedAt time.Time, _ auditrepository.DataScope) ([]byte, bool, error) {
 	s.contentReads++
-	if workspaceID != s.artifact.WorkspaceID || artifactID != s.artifact.ID || tokenHash != s.artifact.TokenSHA256 || requesterUserID != s.artifact.RequesterUserID || !authorizedAt.Before(timeMustParse(s.artifact.ExpiresAt)) {
+	if workspaceID != s.artifact.WorkspaceID || artifactID != s.artifact.ArtifactID || tokenHash != s.artifact.TokenSHA256 || requesterUserID != s.artifact.RequesterUserID || !authorizedAt.Before(timeMustParse(s.artifact.ExpiresAt)) {
 		return nil, false, nil
 	}
 	return append([]byte(nil), s.content...), true, nil

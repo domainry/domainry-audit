@@ -17,8 +17,8 @@ func TestBusinessQueryOwnsPaginationRetentionAndRedaction(t *testing.T) {
 		t.Fatalf("business plan=%#v", plan)
 	}
 	result := ProjectQuery([]contract.Event{
-		{ID: "newer", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "actor-1", RoleKey: "manager", Metadata: map[string]any{"request_id": "req-1", "decision": "approved", "reason": "policy_match", "token": "secret"}, Before: map[string]any{"password": "secret"}, CreatedAt: now.Format(time.RFC3339)},
-		{ID: "older", Family: contract.EventFamilyBusinessEntity, Event: "order.created", ActorID: "actor-1", CreatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
+		{ID: 2, AuditEventID: "newer", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "actor-1", RoleKey: "manager", Metadata: map[string]any{"request_id": "req-1", "decision": "approved", "reason": "policy_match", "token": "secret"}, Before: map[string]any{"password": "secret"}, CreatedAt: now.Format(time.RFC3339)},
+		{ID: 1, AuditEventID: "older", Family: contract.EventFamilyBusinessEntity, Event: "order.created", ActorID: "actor-1", CreatedAt: now.Add(-time.Minute).Format(time.RFC3339)},
 	}, plan)
 	if !result.Truncated || result.NextCursor == "" || len(result.Items) != 1 || result.Items[0].Before["password"] != "[REDACTED]" {
 		t.Fatalf("business result=%#v", result)
@@ -47,7 +47,7 @@ func TestEveryAuditClassProjectsTheSameTraceFieldsAndRedactedMaps(t *testing.T) 
 			family = contract.EventFamilyIdentitySecurity
 		}
 		result := ProjectQuery([]contract.Event{{
-			ID: "event-1", Family: family, Event: eventName, ActorID: "actor-1", RoleKey: "member", CreatedAt: now.Format(time.RFC3339),
+			ID: 1, AuditEventID: "event-1", Family: family, Event: eventName, ActorID: "actor-1", RoleKey: "member", CreatedAt: now.Format(time.RFC3339),
 			Metadata: map[string]any{"request_id": "request-1", "error_code": "denied_by_policy", "secret": "hidden"},
 			Before:   map[string]any{"password": "before-secret"}, After: map[string]any{"token": "after-secret"},
 		}}, plan)

@@ -28,19 +28,19 @@ func NewStore(db modulehost.Database, renderer query.Renderer) *Store {
 	return &Store{db: db, renderer: renderer}
 }
 
-func (s *Store) AppendPrepared(ctx context.Context, event contract.Event) error {
+func (s *Store) AppendPrepared(ctx context.Context, event contract.Event) (contract.Event, error) {
 	if err := validatePrepared(event); err != nil {
-		return err
+		return event, err
 	}
 	return s.insert(ctx, databaseExecutor{s.db}, event)
 }
 
-func (s *Store) AppendPreparedWithin(ctx context.Context, tx contract.Transaction, event contract.Event) error {
+func (s *Store) AppendPreparedWithin(ctx context.Context, tx contract.Transaction, event contract.Event) (contract.Event, error) {
 	if tx == nil {
-		return fmt.Errorf("audit host transaction is required")
+		return event, fmt.Errorf("audit host transaction is required")
 	}
 	if err := validatePrepared(event); err != nil {
-		return err
+		return event, err
 	}
 	return s.insert(ctx, hostTransactionExecutor{tx}, event)
 }
@@ -80,46 +80,59 @@ type resultAdapter struct{ contract.Result }
 
 func (resultAdapter) LastInsertId() (int64, error) { return 0, nil }
 
-func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.Event) error {
+func (s *Store) insert(ctx context.Context, exec eventExecutor, event contract.Event) (contract.Event, error) {
 	createdAt, err := auditTimestampMillis(event.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("parse audit event created_at: %w", err)
+		return event, fmt.Errorf("parse audit event created_at: %w", err)
 	}
 	// Metadata and snapshots belong to the event producer. Audit does not infer
 	// time semantics from keys in these opaque payloads.
 	metadata, err := json.Marshal(event.Metadata)
 	if err != nil {
-		return fmt.Errorf("encode audit metadata: %w", err)
+		return event, fmt.Errorf("encode audit metadata: %w", err)
 	}
 	before, err := json.Marshal(event.Before)
 	if err != nil {
-		return fmt.Errorf("encode audit before: %w", err)
+		return event, fmt.Errorf("encode audit before: %w", err)
 	}
 	after, err := json.Marshal(event.After)
 	if err != nil {
-		return fmt.Errorf("encode audit after: %w", err)
+		return event, fmt.Errorf("encode audit after: %w", err)
 	}
 	actorOrgID := eventActorOrgID(event)
-	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.ID, event.Family, event.Event, event.ObjectKey, event.RecordID, event.ActorID, nullableIdentity(actorOrgID), nullableIdentity(event.OperationID), nullableIdentity(event.CausationID), nullableIdentity(event.OwnerRunID), event.RoleKey, event.Summary, string(metadata), string(before), string(after), createdAt).Build()
+	queryValue, args, err := query.NewWorkspaceInsertBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("audit_event_id", "idempotency_key", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").Values(event.AuditEventID, nullableIdentity(event.IdempotencyKey), event.Family, event.Event, event.ObjectKey, event.RecordID, event.ActorID, nullableIdentity(actorOrgID), nullableIdentity(event.OperationID), nullableIdentity(event.CausationID), nullableIdentity(event.OwnerRunID), event.RoleKey, event.Summary, string(metadata), string(before), string(after), createdAt).Build()
 	if err != nil {
-		return err
+		return event, err
 	}
 	if _, err = exec.ExecContext(ctx, queryValue, args...); err != nil {
+		lookupPredicate := query.Equal("audit_event_id", event.AuditEventID)
+		if strings.TrimSpace(event.IdempotencyKey) != "" {
+			lookupPredicate = query.Equal("idempotency_key", strings.TrimSpace(event.IdempotencyKey))
+		}
 		lookup, lookupArgs, buildErr := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).
-			Columns("family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json").
-			Where(query.Equal("id", event.ID)).Limit(1).Build()
+			Columns("id", "audit_event_id", "family", "event", "object_key", "record_id", "actor_id", "actor_org_id", "operation_id", "causation_id", "owner_run_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").
+			Where(lookupPredicate).Limit(1).Build()
 		if buildErr != nil {
-			return fmt.Errorf("build audit event replay lookup: %w", buildErr)
+			return event, fmt.Errorf("build audit event replay lookup: %w", buildErr)
 		}
-		var storedFamily, storedEvent, objectKey, recordID, actorID, roleKey, summary, storedMetadata, storedBefore, storedAfter string
+		var physicalID, storedCreatedAt int64
+		var storedEventID, storedFamily, storedEvent, objectKey, recordID, actorID, roleKey, summary, storedMetadata, storedBefore, storedAfter string
 		var storedActorOrgID, storedOperationID, storedCausationID, storedOwnerRunID sql.NullString
-		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&storedFamily, &storedEvent, &objectKey, &recordID, &actorID, &storedActorOrgID, &storedOperationID, &storedCausationID, &storedOwnerRunID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter)
+		lookupErr := exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&physicalID, &storedEventID, &storedFamily, &storedEvent, &objectKey, &recordID, &actorID, &storedActorOrgID, &storedOperationID, &storedCausationID, &storedOwnerRunID, &roleKey, &summary, &storedMetadata, &storedBefore, &storedAfter, &storedCreatedAt)
 		if lookupErr == nil && storedFamily == event.Family && storedEvent == event.Event && objectKey == event.ObjectKey && recordID == event.RecordID && actorID == event.ActorID && storedActorOrgID.String == actorOrgID && storedOperationID.String == strings.TrimSpace(event.OperationID) && storedCausationID.String == strings.TrimSpace(event.CausationID) && storedOwnerRunID.String == strings.TrimSpace(event.OwnerRunID) && roleKey == event.RoleKey && summary == event.Summary && storedMetadata == string(metadata) && storedBefore == string(before) && storedAfter == string(after) {
-			return nil
+			event.ID, event.AuditEventID, event.CreatedAt = physicalID, storedEventID, auditTimestampText(storedCreatedAt)
+			return event, nil
 		}
-		return fmt.Errorf("insert audit event: %w", err)
+		return event, fmt.Errorf("insert audit event: %w", err)
 	}
-	return nil
+	lookup, lookupArgs, buildErr := query.NewWorkspaceSelectBuilder(s.renderer, "_audit_events", event.WorkspaceID).Columns("id").Where(query.Equal("audit_event_id", event.AuditEventID)).Limit(1).Build()
+	if buildErr != nil {
+		return event, fmt.Errorf("build audit event identity lookup: %w", buildErr)
+	}
+	if err = exec.QueryRow(ctx, lookup, lookupArgs...).Scan(&event.ID); err != nil {
+		return event, fmt.Errorf("read audit event physical id: %w", err)
+	}
+	return event, nil
 }
 
 func (s *Store) List(ctx context.Context, workspaceID string, queryValue contract.Query) ([]contract.Event, error) {
@@ -212,7 +225,7 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 	} else {
 		b = query.NewSelectBuilder(s.renderer, "_audit_events")
 	}
-	b.Columns("id", "workspace_id", "operation_id", "causation_id", "owner_run_id", "family", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit)
+	b.Columns("id", "audit_event_id", "workspace_id", "operation_id", "causation_id", "owner_run_id", "family", "event", "object_key", "record_id", "actor_id", "role_key", "summary", "metadata_json", "before_json", "after_json", "created_at").OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit)
 	if len(predicates) > 0 {
 		b.Where(query.And(predicates...))
 	}
@@ -231,7 +244,7 @@ func (s *Store) list(ctx context.Context, workspaceID string, scoped bool, query
 		var metadata, before, after string
 		var created int64
 		var operationID, causationID, ownerRunID sql.NullString
-		if err := rows.Scan(&e.ID, &e.WorkspaceID, &operationID, &causationID, &ownerRunID, &e.Family, &e.Event, &e.ObjectKey, &e.RecordID, &e.ActorID, &e.RoleKey, &e.Summary, &metadata, &before, &after, &created); err != nil {
+		if err := rows.Scan(&e.ID, &e.AuditEventID, &e.WorkspaceID, &operationID, &causationID, &ownerRunID, &e.Family, &e.Event, &e.ObjectKey, &e.RecordID, &e.ActorID, &e.RoleKey, &e.Summary, &metadata, &before, &after, &created); err != nil {
 			return nil, err
 		}
 		e.OperationID, e.CausationID, e.OwnerRunID = operationID.String, causationID.String, ownerRunID.String

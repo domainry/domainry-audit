@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/domainry/domainry-audit-sdk/contract"
 	auditrepository "github.com/domainry/domainry-audit/internal/domain/audit/repository"
 	auditservice "github.com/domainry/domainry-audit/internal/domain/audit/service"
+	"github.com/domainry/domainry-foundation/entityid"
 )
 
 const exportTTL = 15 * time.Minute
@@ -123,7 +125,7 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 			if filters.Result != "" && !strings.EqualFold(filters.Result, result) {
 				continue
 			}
-			rows = append(rows, []string{event.ID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, auditservice.AuditEventRequestID(event), result, auditservice.ExportEventReason(event), event.CreatedAt})
+			rows = append(rows, []string{event.AuditEventID, event.Event, event.ObjectKey, event.RecordID, event.ActorID, event.RoleKey, auditservice.AuditEventRequestID(event), result, auditservice.ExportEventReason(event), event.CreatedAt})
 			if len(rows) == exportMaxRows {
 				break
 			}
@@ -147,13 +149,16 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 	// Shared Artifact persists expiry in Unix milliseconds. The signed token
 	// must use that same precision before the artifact is written and reread.
 	expiresAt := now.Add(exportTTL).Truncate(time.Millisecond).Format(time.RFC3339Nano)
-	artifactID := exportArtifactID(principal.WorkspaceID, principal.UserID, idempotencyKey)
+	artifactID, err := entityid.New("art")
+	if err != nil {
+		return contract.ExportPrepared{}, exportError("export_identity_failed", err)
+	}
 	auditIdentity := "audit_events:" + artifactID + ":sha256:" + scopeHash
 	token := s.exportToken(artifactID, scopeHash, expiresAt)
-	artifact := contract.ExportArtifact{ID: artifactID, WorkspaceID: strings.TrimSpace(principal.WorkspaceID), RequesterUserID: strings.TrimSpace(principal.UserID), RoleKey: principal.RoleKey, IdempotencyKey: idempotencyKey, Filters: filters, ScopeSHA256: scopeHash, AuthorizationScopeSHA256: authorizationHash, TokenSHA256: exportHash(token), Filename: "audit-events-" + now.Format("20060102T150405Z") + ".csv", ContentSHA256: exportBytesHash(content), RowCount: len(rows), Content: content, AuditIdentity: auditIdentity, Status: "prepared", CreatedAt: now.Format(time.RFC3339Nano), ExpiresAt: expiresAt}
+	artifact := contract.ExportArtifact{ArtifactID: artifactID, WorkspaceID: strings.TrimSpace(principal.WorkspaceID), RequesterUserID: strings.TrimSpace(principal.UserID), RoleKey: principal.RoleKey, IdempotencyKey: idempotencyKey, Filters: filters, ScopeSHA256: scopeHash, AuthorizationScopeSHA256: authorizationHash, TokenSHA256: exportHash(token), Filename: "audit-events-" + now.Format("20060102T150405Z") + ".csv", ContentSHA256: exportBytesHash(content), RowCount: len(rows), Content: content, AuditIdentity: auditIdentity, Status: "prepared", CreatedAt: now.Format(time.RFC3339Nano), ExpiresAt: expiresAt}
 	stored, created, err := s.store.CreateOrGetExport(ctx, artifact)
 	if errors.Is(err, contract.ErrExportIdempotencyConflict) {
-		if auditErr := s.appendExportConflictAudit(ctx, principal, artifact.ID); auditErr != nil {
+		if auditErr := s.appendExportConflictAudit(ctx, principal, artifact.ArtifactID); auditErr != nil {
 			return contract.ExportPrepared{}, auditErr
 		}
 		return contract.ExportPrepared{}, exportError("idempotency_key_conflict", err)
@@ -161,9 +166,9 @@ func (s *ExportService) prepareExport(ctx context.Context, request contract.Expo
 	if err != nil {
 		return contract.ExportPrepared{}, exportError("export_persistence_failed", err)
 	}
-	token = s.exportToken(stored.ID, stored.ScopeSHA256, stored.ExpiresAt)
+	token = s.exportToken(stored.ArtifactID, stored.ScopeSHA256, stored.ExpiresAt)
 	if exportHash(token) != stored.TokenSHA256 {
-		return contract.ExportPrepared{}, exportError("export_integrity_failed", nil)
+		return contract.ExportPrepared{}, exportError("export_integrity_failed", fmt.Errorf("stored audit export token hash does not match artifact %s", stored.ArtifactID))
 	}
 	if err := s.appendExportAudit(ctx, "audit_export_prepared", principal, stored, map[string]any{"idempotency_replayed": !created, "result": "success", "reason": "export_prepared"}); err != nil {
 		return contract.ExportPrepared{}, err
@@ -194,7 +199,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 	if err != nil {
 		return nil, "", exportError("export_persistence_failed", err)
 	}
-	if !found || !hmac.Equal([]byte(token), []byte(s.exportToken(a.ID, a.ScopeSHA256, a.ExpiresAt))) {
+	if !found || !hmac.Equal([]byte(token), []byte(s.exportToken(a.ArtifactID, a.ScopeSHA256, a.ExpiresAt))) {
 		return nil, "", exportError("export_download_not_found", nil)
 	}
 	if a.RequesterUserID != strings.TrimSpace(principal.UserID) || a.WorkspaceID != strings.TrimSpace(principal.WorkspaceID) {
@@ -213,7 +218,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 			return nil, "", err
 		}
 	}
-	content, found, err := s.store.ExportContentWithinDataScope(ctx, a.WorkspaceID, a.ID, exportHash(token), principal.UserID, now, artifactScope)
+	content, found, err := s.store.ExportContentWithinDataScope(ctx, a.WorkspaceID, a.ArtifactID, exportHash(token), principal.UserID, now, artifactScope)
 	if err != nil {
 		if errors.Is(err, auditrepository.ErrExportContentIntegrity) {
 			return nil, "", exportError("export_integrity_failed", err)
@@ -231,7 +236,7 @@ func (s *ExportService) downloadExport(ctx context.Context, token string, princi
 			return nil, "", err
 		}
 	}
-	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ID, principal.UserID, now.Format(time.RFC3339Nano), artifactScope)
+	first, err := s.store.RecordExportDownloadWithinDataScope(ctx, a.WorkspaceID, a.ArtifactID, principal.UserID, now.Format(time.RFC3339Nano), artifactScope)
 	if err != nil {
 		return nil, "", exportError("export_persistence_failed", err)
 	}
@@ -247,7 +252,7 @@ func reauthorizeExportRows(ctx context.Context, content []byte, principal contra
 	reader := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte{0xef, 0xbb, 0xbf})))
 	reader.FieldsPerRecord = 10
 	rows, err := reader.ReadAll()
-	if err != nil || len(rows) == 0 || rows[0][0] != "audit_id" || rows[0][2] != "object_key" || rows[0][3] != "record_id" {
+	if err != nil || len(rows) == 0 || rows[0][0] != "audit_event_id" || rows[0][2] != "object_key" || rows[0][3] != "record_id" {
 		return exportError("export_integrity_failed", err)
 	}
 	access := map[[2]string]bool{}
@@ -277,7 +282,7 @@ func encodeExportCSV(rows [][]string) ([]byte, error) {
 	var b bytes.Buffer
 	b.Write([]byte{0xef, 0xbb, 0xbf})
 	w := csv.NewWriter(&b)
-	if err := w.Write([]string{"audit_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}); err != nil {
+	if err := w.Write([]string{"audit_event_id", "event", "object_key", "record_id", "actor_id", "role_key", "request_id", "result", "reason", "created_at"}); err != nil {
 		return nil, err
 	}
 	if err := w.WriteAll(rows); err != nil {
@@ -291,10 +296,6 @@ func (s *ExportService) exportToken(id, scope, expires string) string {
 	mac := hmac.New(sha256.New, s.exportTokenKey)
 	_, _ = mac.Write([]byte(payload + "\x00" + scope))
 	return payload + "." + hex.EncodeToString(mac.Sum(nil))
-}
-func exportArtifactID(w, u, k string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(w) + "\x00" + strings.TrimSpace(u) + "\x00audit_events\x00" + strings.TrimSpace(k)))
-	return "audexp_" + hex.EncodeToString(sum[:16])
 }
 func exportAuthorizationHash(p contract.ExportPrincipal, scope auditrepository.DataScope) string {
 	caps := append([]string(nil), p.SystemCapabilities...)
@@ -323,14 +324,14 @@ func (s *ExportService) appendExportAudit(ctx context.Context, event string, p c
 	if err != nil {
 		return exportError("export_audit_failed", err)
 	}
-	metadata := map[string]any{"artifact_id": a.ID, "audit_identity": a.AuditIdentity, "content_sha256": a.ContentSHA256, "scope_sha256": a.ScopeSHA256, "row_count": a.RowCount, "expires_at": expiresAt.UTC().UnixMilli()}
+	metadata := map[string]any{"artifact_id": a.ArtifactID, "audit_identity": a.AuditIdentity, "content_sha256": a.ContentSHA256, "scope_sha256": a.ScopeSHA256, "row_count": a.RowCount, "expires_at": expiresAt.UTC().UnixMilli()}
 	if actorOrgID := exportActorOrgID(p); actorOrgID != "" {
 		metadata["actor_org_id"] = actorOrgID
 	}
 	for k, v := range extra {
 		metadata[k] = v
 	}
-	_, err = s.appender.Append(ctx, contract.AppendRequest{Family: contract.EventFamilyAuditExport, Event: event, ObjectKey: "audit_events", RecordID: a.ID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
+	_, err = s.appender.Append(ctx, contract.AppendRequest{Family: contract.EventFamilyAuditExport, Event: event, ObjectKey: "audit_events", RecordID: a.ArtifactID, Actor: exportAuditActor(p), Summary: "Audit event export lifecycle", Metadata: metadata})
 	if err != nil {
 		return exportError("export_audit_failed", err)
 	}
@@ -378,6 +379,6 @@ func exportActorOrgID(principal contract.ExportPrincipal) string {
 	return strings.TrimSpace(context.Principal.Identity.OrgID)
 }
 func preparedExport(a contract.ExportArtifact, token string) contract.ExportPrepared {
-	return contract.ExportPrepared{ID: a.ID, ReportSource: "audit_events", Filename: a.Filename, ContentSHA256: a.ContentSHA256, RowCount: a.RowCount, AuditIdentity: a.AuditIdentity, ScopeSHA256: a.ScopeSHA256, Filters: a.Filters, DownloadToken: token, ExpiresAt: a.ExpiresAt}
+	return contract.ExportPrepared{ArtifactID: a.ArtifactID, ReportSource: "audit_events", Filename: a.Filename, ContentSHA256: a.ContentSHA256, RowCount: a.RowCount, AuditIdentity: a.AuditIdentity, ScopeSHA256: a.ScopeSHA256, Filters: a.Filters, DownloadToken: token, ExpiresAt: a.ExpiresAt}
 }
 func exportError(code string, err error) error { return &contract.ExportError{Code: code, Err: err} }

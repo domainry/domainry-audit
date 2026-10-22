@@ -2,7 +2,9 @@ package auditstore
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"slices"
 	"strings"
 	"testing"
@@ -36,7 +38,7 @@ func TestListWithinDataScopePushesOwnerAndOrganizationIntoSQL(t *testing.T) {
 
 	owner := auditrepository.OwnerDataScope("user")
 	events, err := store.ListWithinDataScope(t.Context(), "workspace", contract.Query{}, owner)
-	if err != nil || len(events) != 1 || events[0].ID != "one" {
+	if err != nil || len(events) != 1 || events[0].AuditEventID != auditStoreTestEventID("one") {
 		t.Fatalf("owner events=%#v err=%v", events, err)
 	}
 	ownerWhere := auditStoreTestWhere(capture.lastQuery)
@@ -46,7 +48,7 @@ func TestListWithinDataScopePushesOwnerAndOrganizationIntoSQL(t *testing.T) {
 
 	organization := auditrepository.DataScope{OrganizationIDs: []string{"org-a"}}
 	events, err = store.ListWithinDataScope(t.Context(), "workspace", contract.Query{}, organization)
-	if err != nil || len(events) != 1 || events[0].ID != "one" {
+	if err != nil || len(events) != 1 || events[0].AuditEventID != auditStoreTestEventID("one") {
 		t.Fatalf("organization events=%#v err=%v", events, err)
 	}
 	if !strings.Contains(auditStoreTestWhere(capture.lastQuery), "actor_org_id") {
@@ -81,14 +83,14 @@ func TestListWithinOrganizationScopeFailsClosedWithoutActorOrganizationEvidence(
 func TestIdempotentReplayAcceptsMissingOptionalActorOrganization(t *testing.T) {
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
-	event := contract.Event{ID: "without-org", WorkspaceID: "workspace", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z"}
-	if err := store.AppendPrepared(t.Context(), event); err != nil {
+	event := contract.Event{AuditEventID: auditStoreTestEventID("without-org"), WorkspaceID: "workspace", Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z"}
+	if _, err := store.AppendPrepared(t.Context(), event); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), `UPDATE _audit_events SET actor_org_id = NULL WHERE workspace_id = 'workspace' AND id = 'without-org'`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `UPDATE _audit_events SET actor_org_id = NULL WHERE workspace_id = ? AND audit_event_id = ?`, "workspace", event.AuditEventID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendPrepared(t.Context(), event); err != nil {
+	if _, err := store.AppendPrepared(t.Context(), event); err != nil {
 		t.Fatalf("missing optional actor organization broke exact replay: %v", err)
 	}
 }
@@ -97,10 +99,10 @@ func TestCorrelationIdentitiesPersistFilterAndParticipateInExactReplay(t *testin
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
 	event := contract.Event{
-		ID: "correlated", WorkspaceID: "workspace", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1",
+		AuditEventID: auditStoreTestEventID("correlated"), WorkspaceID: "workspace", OperationID: "operation-1", CausationID: "cause-1", OwnerRunID: "workflow-1",
 		Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: "user", Metadata: map[string]any{}, CreatedAt: "2026-09-03T00:00:00Z",
 	}
-	if err := store.AppendPrepared(t.Context(), event); err != nil {
+	if _, err := store.AppendPrepared(t.Context(), event); err != nil {
 		t.Fatal(err)
 	}
 	for name, queryValue := range map[string]contract.Query{
@@ -109,13 +111,13 @@ func TestCorrelationIdentitiesPersistFilterAndParticipateInExactReplay(t *testin
 		"owner run": {OwnerRunID: "workflow-1"},
 	} {
 		events, err := store.List(t.Context(), "workspace", queryValue)
-		if err != nil || len(events) != 1 || events[0].ID != event.ID || events[0].OperationID != event.OperationID || events[0].CausationID != event.CausationID || events[0].OwnerRunID != event.OwnerRunID {
+		if err != nil || len(events) != 1 || events[0].AuditEventID != event.AuditEventID || events[0].OperationID != event.OperationID || events[0].CausationID != event.CausationID || events[0].OwnerRunID != event.OwnerRunID {
 			t.Fatalf("%s filter events=%#v err=%v", name, events, err)
 		}
 	}
 	conflict := event
 	conflict.OperationID = "operation-2"
-	if err := store.AppendPrepared(t.Context(), conflict); err == nil {
+	if _, err := store.AppendPrepared(t.Context(), conflict); err == nil {
 		t.Fatal("changed operation identity was accepted as an exact replay")
 	}
 }
@@ -125,7 +127,8 @@ func TestEraseSubjectIsAtomicAcrossAllMatchingAuditEvents(t *testing.T) {
 	store := NewStore(database, renderer)
 	appendAuditStoreTestEvent(t, store, "one", "workspace", "user", "")
 	appendAuditStoreTestEvent(t, store, "two", "workspace", "user", "")
-	if _, err := database.ExecContext(t.Context(), `CREATE TRIGGER reject_second_audit_erase BEFORE UPDATE OF actor_id ON _audit_events WHEN OLD.id = 'two' BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+	trigger := `CREATE TRIGGER reject_second_audit_erase BEFORE UPDATE OF actor_id ON _audit_events WHEN OLD.audit_event_id = '` + auditStoreTestEventID("two") + `' BEGIN SELECT RAISE(ABORT, 'injected'); END`
+	if _, err := database.ExecContext(t.Context(), trigger); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.EraseSubject(t.Context(), "workspace", "user"); err == nil {
@@ -141,14 +144,14 @@ func TestListSystemClassMatchesContractAuthenticationRules(t *testing.T) {
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
 	events := []contract.Event{
-		{ID: "auth-exact", WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth", ObjectKey: "session", CreatedAt: "2026-09-03T00:00:01Z"},
-		{ID: "auth-prefix", WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
-		{ID: "authentication-prefix", WorkspaceID: "workspace", Family: contract.EventFamilyIdentitySecurity, Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
-		{ID: "oauth-governance", WorkspaceID: "workspace", Family: contract.EventFamilyIdentityGovernance, Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
-		{ID: "export-conflict", WorkspaceID: "workspace", Family: contract.EventFamilyAuditExport, Event: "audit_export_conflict", ObjectKey: "audit_events", Metadata: map[string]any{"artifact_id": "artifact", "result": "conflict", "reason": "fingerprint"}, CreatedAt: "2026-09-03T00:00:05Z"},
+		{AuditEventID: auditStoreTestEventID("auth-exact"), WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth", ObjectKey: "session", CreatedAt: "2026-09-03T00:00:01Z"},
+		{AuditEventID: auditStoreTestEventID("auth-prefix"), WorkspaceID: "workspace", Family: contract.EventFamilyRuntimeSecurity, Event: "auth_workspace_denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:02Z"},
+		{AuditEventID: auditStoreTestEventID("authentication-prefix"), WorkspaceID: "workspace", Family: contract.EventFamilyIdentitySecurity, Event: "authentication.denied", ObjectKey: "http_request", CreatedAt: "2026-09-03T00:00:03Z"},
+		{AuditEventID: auditStoreTestEventID("oauth-governance"), WorkspaceID: "workspace", Family: contract.EventFamilyIdentityGovernance, Event: "oauth_connection_updated", ObjectKey: "connection", CreatedAt: "2026-09-03T00:00:04Z"},
+		{AuditEventID: auditStoreTestEventID("export-conflict"), WorkspaceID: "workspace", Family: contract.EventFamilyAuditExport, Event: "audit_export_conflict", ObjectKey: "audit_events", Metadata: map[string]any{"artifact_id": "artifact", "result": "conflict", "reason": "fingerprint"}, CreatedAt: "2026-09-03T00:00:05Z"},
 	}
 	for _, event := range events {
-		if err := store.AppendPrepared(t.Context(), event); err != nil {
+		if _, err := store.AppendPrepared(t.Context(), event); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -205,7 +208,7 @@ func appendAuditStoreTestEvent(t *testing.T, store *Store, id, workspaceID, acto
 	if actorOrgID != "" {
 		metadata["actor_org_id"] = actorOrgID
 	}
-	if err := store.AppendPrepared(t.Context(), contract.Event{ID: id, WorkspaceID: workspaceID, Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: actorID, Metadata: metadata, CreatedAt: "2026-09-03T00:00:00Z"}); err != nil {
+	if _, err := store.AppendPrepared(t.Context(), contract.Event{AuditEventID: auditStoreTestEventID(id), WorkspaceID: workspaceID, Family: contract.EventFamilyBusinessEntity, Event: "order.updated", ActorID: actorID, Metadata: metadata, CreatedAt: "2026-09-03T00:00:00Z"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -221,7 +224,7 @@ func assertAuditStoreEventIDs(t *testing.T, events []contract.Event, want ...str
 		t.Fatalf("event ids=%v want=%v", auditStoreEventIDs(events), want)
 	}
 	for index := range want {
-		if events[index].ID != want[index] {
+		if events[index].AuditEventID != auditStoreTestEventID(want[index]) {
 			t.Fatalf("event ids=%v want=%v", auditStoreEventIDs(events), want)
 		}
 	}
@@ -230,7 +233,12 @@ func assertAuditStoreEventIDs(t *testing.T, events []contract.Event, want ...str
 func auditStoreEventIDs(events []contract.Event) []string {
 	ids := make([]string, len(events))
 	for index := range events {
-		ids[index] = events[index].ID
+		ids[index] = events[index].AuditEventID
 	}
 	return ids
+}
+
+func auditStoreTestEventID(seed string) string {
+	digest := sha256.Sum256([]byte(seed))
+	return "audevt_" + hex.EncodeToString(digest[:16])
 }

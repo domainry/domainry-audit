@@ -18,5 +18,6 @@ func AppendPreparedWithin(ctx context.Context, dialect modulehost.Dialect, tx co
 	if dialect == nil {
 		return fmt.Errorf("audit host ORM dialect is required")
 	}
-	return auditstore.NewStore(nil, dialect).AppendPreparedWithin(ctx, tx, event)
+	_, err := auditstore.NewStore(nil, dialect).AppendPreparedWithin(ctx, tx, event)
+	return err
 }

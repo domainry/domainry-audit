@@ -31,7 +31,8 @@ type QueryPlan struct {
 }
 
 type QueryEvent struct {
-	ID, Event, ObjectKey, RecordID, ActorID, RoleKey, RequestID              string
+	ID                                                                       int64
+	AuditEventID, Event, ObjectKey, RecordID, ActorID, RoleKey, RequestID    string
 	OperationID, CausationID, OwnerRunID, Result, Reason, Summary, CreatedAt string
 	Metadata, Before, After                                                  map[string]any
 }
@@ -97,7 +98,7 @@ func ProjectQuery(events []contract.Event, plan QueryPlan) QueryResult {
 		projected := event
 		projected.Metadata = metadata
 		item := QueryEvent{
-			ID: event.ID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
+			ID: event.ID, AuditEventID: event.AuditEventID, Event: event.Event, ObjectKey: event.ObjectKey, RecordID: event.RecordID,
 			ActorID: event.ActorID, RoleKey: event.RoleKey, RequestID: AuditEventRequestID(projected),
 			OperationID: event.OperationID, CausationID: event.CausationID, OwnerRunID: event.OwnerRunID,
 			Result: ExportEventResult(projected), Reason: ExportEventReason(projected),
