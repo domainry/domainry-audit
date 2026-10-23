@@ -234,7 +234,7 @@ func auditExportPrincipal(principal modulehost.AuditPrincipal) contract.ExportPr
 	return contract.ExportPrincipal{
 		WorkspaceID: principal.Identity.WorkspaceID, UserID: principal.Identity.UserID,
 		RoleKey: principal.Identity.RoleKey, AuthorizationRevision: principal.AuthorizationRevision,
-		RequestID: principal.RequestID, CorrelationID: principal.CorrelationID,
+		RequestID:            principal.RequestID,
 		AuthorizationContext: auditExportAuthorizationContext{Principal: principal},
 	}
 }

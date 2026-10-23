@@ -6,9 +6,9 @@
 
 ## Business scenarios
 
-- An order approval records actor, operation, subject, outcome, reason, and correlation after the authoritative transaction commits.
+- An order approval records actor, operation, subject, outcome, reason, and explicit operation/causation identities after the authoritative transaction commits.
 - A privileged Role or provider configuration change records before/after evidence without copying secrets into Audit.
-- A denied high-risk export records exact actor, permission/policy, target, outcome, and correlation even though no business write commits.
+- A denied high-risk export records exact actor, permission/policy, target, outcome, and explicit attempt identity even though no business write commits.
 
 ## Use when
 
@@ -25,7 +25,8 @@ plaintext credentials, or full sensitive record payloads.
 Let the source owner decide the effect, choose the registered event family it
 owns, append a typed event at the transaction boundary or durable outbox,
 include the family's required metadata plus stable identities and safe
-evidence, and use one idempotency/correlation identity across retries.
+evidence, and preserve the same idempotency key and owner-defined business
+identities across retries.
 
 An event family is a contract, not a free-form label. Register it centrally in
 the Audit SDK with an owner, Audit class, optional allowed event prefixes, and
@@ -46,14 +47,14 @@ Operation receipt as a pretend owner run.
 
 | Evidence requirement | Adapt with | Concrete implementation | Wrong adaptation |
 | --- | --- | --- | --- |
-| Record who approved an order | Registered business-action family plus Audit append | After the guarded approval commits, append actor, required Action key, order subject, outcome, reason, and correlation ID exactly once | Writing an “approved” event before the transaction succeeds |
+| Record who approved an order | Registered business-action family plus Audit append | After the guarded approval commits, append actor, required Action key, order subject, outcome, reason, operation ID and causation ID exactly once under the event idempotency key | Writing an “approved” event before the transaction succeeds |
 | Record a denied privileged attempt | Denial Audit event | Capture principal, exact permission/policy, target identity, reason, and safe diagnostic metadata without the secret request body | Logging only an HTTP 403 line or copying tokens into evidence |
 | Record a provider credential rotation | Administrative event with redacted before/after metadata | Record connection/key identities, actor, revision, and outcome; omit secret material | Storing old/new secret values in Audit |
 | Diagnose CPU spikes | Monitoring metrics | Publish operational observations and time series | Flooding immutable Audit with health samples |
 
 ## Example
 
-When `order.approve` commits, the order owner appends actor, Workspace, Object/record, exact Action, successful outcome, reason, version, and correlation at the correct commit/outbox boundary. A denied sensitive export appends denial evidence with the exact policy and safe target metadata even though no business write occurs. A transient retry, worker heartbeat, cache refresh delivery, stream connection, uncommitted intent, debug line, metric sample, plaintext token, or full sensitive payload is not an Audit event. Append authority belongs to the source owner/host; an ordinary user cannot manufacture authoritative evidence by calling a generic endpoint.
+When `order.approve` commits, the order owner appends actor, Workspace, Object/record, exact Action, successful outcome, reason, version, operation ID and causation ID at the correct commit/outbox boundary. A denied sensitive export appends denial evidence with the exact policy and safe target metadata even though no business write occurs. A transient retry, worker heartbeat, cache refresh delivery, stream connection, uncommitted intent, debug line, metric sample, plaintext token, or full sensitive payload is not an Audit event. Append authority belongs to the source owner/host; an ordinary user cannot manufacture authoritative evidence by calling a generic endpoint.
 
 ## Permissions and scope
 

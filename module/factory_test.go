@@ -123,7 +123,7 @@ func (h scopedAuditApplicationHost) AuthorizeAuditRecord(_ context.Context, _ mo
 func (h testAuditApplicationHost) ResolveAuditPrincipal(_ context.Context, request modulehost.AuditPrincipalRequest) (modulehost.AuditPrincipal, error) {
 	return modulehost.AuditPrincipal{
 		Identity: request.Identity, BusinessProfileKey: request.BusinessProfileKey, BusinessProfileID: request.BusinessProfileID,
-		RequestID: request.RequestID, CorrelationID: request.CorrelationID, AuthorizationRevision: request.Identity.AuthorizationRevision,
+		RequestID: request.RequestID, AuthorizationRevision: request.Identity.AuthorizationRevision,
 	}, nil
 }
 func (testAuditApplicationHost) AuthorizeAuditRecord(context.Context, modulehost.AuditPrincipal, string, string) error {
@@ -340,7 +340,7 @@ func TestBusinessExportLifecycleIsOwnedByModule(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding.Exporter().ConfigureExport([]byte("0123456789abcdef0123456789abcdef"), func(context.Context, contract.ExportFilter, contract.ExportPrincipal) error { return nil })
-	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1", RequestID: "prepare-request-1", CorrelationID: "correlation-1"}
+	principal := contract.ExportPrincipal{WorkspaceID: "workspace", UserID: "user", RoleKey: "member", AuthorizationRevision: "r1", RequestID: "prepare-request-1"}
 	prepared, err := binding.Exporter().PrepareExport(t.Context(), contract.ExportRequest{}, "idem-1", principal)
 	if err != nil {
 		t.Fatal(err)

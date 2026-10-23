@@ -367,7 +367,7 @@ func (s *ExportService) appendExportConflictAudit(ctx context.Context, p contrac
 func exportAuditActor(p contract.ExportPrincipal) contract.Actor {
 	return contract.Actor{
 		WorkspaceID: p.WorkspaceID, SubjectID: p.UserID, RoleKey: p.RoleKey,
-		RequestID: p.RequestID, CorrelationID: p.CorrelationID, AuthorizationRevision: p.AuthorizationRevision,
+		RequestID: p.RequestID, AuthorizationRevision: p.AuthorizationRevision,
 	}
 }
 

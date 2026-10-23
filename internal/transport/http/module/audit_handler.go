@@ -27,13 +27,8 @@ func (h *AuditHandler) auditPrincipal(r *http.Request) (modulehost.AuditPrincipa
 	if !ok {
 		return modulehost.AuditPrincipal{}, auditHTTPError(http.StatusUnauthorized, "backend.auth.token_required", nil)
 	}
-	requestID := requestcontext.RequestID(r.Context())
-	if requestID == "" {
-		requestID = strings.TrimSpace(r.Header.Get("X-Request-ID"))
-	}
 	return h.application.ResolvePrincipal(r.Context(), modulehost.AuditPrincipalRequest{
 		Identity: identity, BusinessProfileKey: strings.TrimSpace(r.Header.Get("X-Business-Profile-Key")),
-		BusinessProfileID: strings.TrimSpace(r.Header.Get("X-Business-Profile-ID")), RequestID: requestID,
-		CorrelationID: requestcontext.CorrelationID(r.Context()),
+		BusinessProfileID: strings.TrimSpace(r.Header.Get("X-Business-Profile-ID")), RequestID: requestcontext.RequestID(r.Context()),
 	})
 }

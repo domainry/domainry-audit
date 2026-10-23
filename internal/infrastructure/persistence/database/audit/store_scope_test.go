@@ -95,7 +95,7 @@ func TestIdempotentReplayAcceptsMissingOptionalActorOrganization(t *testing.T) {
 	}
 }
 
-func TestCorrelationIdentitiesPersistFilterAndParticipateInExactReplay(t *testing.T) {
+func TestBusinessLineagePersistsFiltersAndParticipatesInExactReplay(t *testing.T) {
 	database, renderer := openAuditStoreTestDatabase(t)
 	store := NewStore(database, renderer)
 	event := contract.Event{

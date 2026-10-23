@@ -39,7 +39,7 @@ func NewBinding(audit *auditapp.Service, exports *auditapp.ExportService, export
 }
 
 func (b *Binding) Descriptor() sdk.Descriptor {
-	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV1, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: b.exportReady, SubjectLifecycle: true, HTTPAdapter: true}}
+	return sdk.Descriptor{ProtocolVersion: sdk.ProtocolVersionV2, Mode: sdk.DeploymentModeModule, Capabilities: sdk.Capabilities{TransactionalAppend: true, Query: true, Export: b.exportReady, SubjectLifecycle: true, HTTPAdapter: true}}
 }
 func (b *Binding) Factory() contract.EventFactory                        { return b.audit }
 func (b *Binding) Appender() contract.Appender                           { return b.audit }
