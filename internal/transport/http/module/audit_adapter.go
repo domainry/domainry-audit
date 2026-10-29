@@ -69,7 +69,11 @@ func (s *AuditHTTPAdapter) Routes() []modulehttp.Route {
 			OperationKey: permission[separator+1:], OperationLabel: label, Label: label, Exposures: exposures,
 			Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 			HTTP:          &actioncontract.HTTPBinding{Method: method, RouteTemplate: path}, Permission: &actioncontract.PermissionDefinition{
-				Key: permission, Owner: "module:audit", ResourceKey: permission[:separator], OperationKey: permission[separator+1:], Label: label, Category: "Audit", LifecycleStatus: actioncontract.LifecycleActive,
+				Key: permission, Owner: "module:audit", ModuleKey: "audit", GroupKey: permission[:separator],
+				ResourceKey: permission[:separator], OperationKey: permission[separator+1:], Label: label, Category: "Audit",
+				GrantMode: actioncontract.PermissionGrantInternal, ScopeKind: actioncontract.PermissionScopeNone,
+				DefaultLocale: "en", I18n: auditPermissionText(permission[:separator], permission[separator+1:], label),
+				LifecycleStatus: actioncontract.LifecycleActive,
 			},
 			EffectClass: effect, RiskLevel: risk, IdempotencyDecision: idempotency, AuditClass: auditClass, LifecycleStatus: actioncontract.LifecycleActive,
 		}
@@ -93,6 +97,27 @@ func (s *AuditHTTPAdapter) Routes() []modulehttp.Route {
 		route("GET /audit/system/events", auditapp.AuditPermissionOperationsRead, "Read operations audit events", "operations_audit_read", "", operations, actioncontract.EffectRead, actioncontract.RiskMedium, "not_applicable"),
 		route("GET /audit/system/events/export", auditapp.AuditPermissionOperationsExport, "Export operations audit events", "operations_audit_export", "", operations, actioncontract.EffectRead, actioncontract.RiskHigh, "not_applicable"),
 	)
+}
+
+func auditPermissionText(resourceKey, operationKey, englishLabel string) actioncontract.PermissionLocalizedText {
+	resourceEnglish := map[string]string{
+		"audit.business":        "Business activity audit",
+		"audit.business.export": "Business audit export",
+		"audit.governance":      "Governance audit",
+		"audit.ops":             "Operations audit",
+	}[resourceKey]
+	resourceChinese := map[string]string{
+		"audit.business":        "业务操作审计",
+		"audit.business.export": "业务审计导出",
+		"audit.governance":      "治理审计",
+		"audit.ops":             "运维审计",
+	}[resourceKey]
+	operationEnglish := map[string]string{"read": "Read", "export": "Export", "prepare": "Prepare export", "download": "Download export"}[operationKey]
+	operationChinese := map[string]string{"read": "查看", "export": "导出", "prepare": "准备导出", "download": "下载导出"}[operationKey]
+	return actioncontract.PermissionLocalizedText{
+		"en":    {ModuleLabel: "Audit", GroupLabel: resourceEnglish, ResourceLabel: resourceEnglish, OperationLabel: operationEnglish, Label: englishLabel, Description: "Provides access to " + resourceEnglish + " for the “" + operationEnglish + "” operation."},
+		"zh-CN": {ModuleLabel: "审计", GroupLabel: resourceChinese, ResourceLabel: resourceChinese, OperationLabel: operationChinese, Label: resourceChinese + " · " + operationChinese, Description: "允许执行“" + resourceChinese + "”的“" + operationChinese + "”操作。"},
+	}
 }
 
 // AuthorizationActions returns detached source-owned Action declarations for
